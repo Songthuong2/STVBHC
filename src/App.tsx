@@ -484,15 +484,6 @@ export default function App() {
         })}
       </div>
 
-      {/* Location Date for Regulation */}
-      {formData.docType === 'regulation' && (
-        <div className="flex justify-end mb-4">
-          <div className="w-[50%] text-center">
-            <p className="text-[13px] italic">{formData.locationDate}</p>
-          </div>
-        </div>
-      )}
-
       {/* Footer / Signatures */}
       <div className="flex justify-between mt-auto">
         <div className="w-[45%]">
@@ -502,6 +493,9 @@ export default function App() {
           </p>
         </div>
         <div className="w-[50%] text-center">
+          {formData.docType === 'regulation' && (
+            <p className="text-[13px] italic mb-2">{formData.locationDate}</p>
+          )}
           <p className="text-[14px] font-bold uppercase">{formData.signerPosition}</p>
           <div className="h-28 flex items-center justify-center italic text-slate-300 text-[12px]">
             (Chỗ ký tên, đóng dấu)

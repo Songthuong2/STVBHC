@@ -195,41 +195,6 @@ app.post('/api/generate-docx', async (req, res) => {
             });
           }),
 
-          // Location for Regulation (Conditional)
-          ...(docType === 'regulation' ? [
-            new Table({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              borders: {
-                top: { style: BorderStyle.NONE },
-                bottom: { style: BorderStyle.NONE },
-                left: { style: BorderStyle.NONE },
-                right: { style: BorderStyle.NONE },
-                insideHorizontal: { style: BorderStyle.NONE },
-                insideVertical: { style: BorderStyle.NONE },
-              },
-              rows: [
-                new TableRow({
-                  children: [
-                    new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, children: [] }),
-                    new TableCell({ 
-                      width: { size: 50, type: WidthType.PERCENTAGE }, 
-                      children: [
-                        new Paragraph({
-                          alignment: AlignmentType.CENTER,
-                          children: [
-                            new TextRun({ text: locationDate, font: fontFamily, size: 28, italics: true }),
-                          ],
-                        })
-                      ] 
-                    }),
-                  ],
-                })
-              ]
-            })
-          ] : []),
-
-          new Paragraph({ spacing: { before: 600 } }),
-
           // Bottom section: Recipient and Signer
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
@@ -244,7 +209,7 @@ app.post('/api/generate-docx', async (req, res) => {
             rows: [
               new TableRow({
                 children: [
-                  new TableCell({
+                   new TableCell({
                     width: { size: 50, type: WidthType.PERCENTAGE },
                     children: [
                       new Paragraph({
@@ -264,6 +229,15 @@ app.post('/api/generate-docx', async (req, res) => {
                   new TableCell({
                     width: { size: 50, type: WidthType.PERCENTAGE },
                     children: [
+                      ...(docType === 'regulation' ? [
+                        new Paragraph({
+                          alignment: AlignmentType.CENTER,
+                          children: [
+                            new TextRun({ text: locationDate, font: fontFamily, size: 28, italics: true }),
+                          ],
+                        }),
+                        new Paragraph({ spacing: { before: 120 } }), // Tight spacing
+                      ] : []),
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         children: [
