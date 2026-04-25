@@ -781,100 +781,108 @@ export default function App() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <div className="flex justify-between items-end mb-1">
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs font-medium text-slate-600">Nội dung chi tiết</label>
-                      <div className="flex gap-1 ml-2 border-l border-slate-200 pl-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nội dung chi tiết</label>
+                    <div className="flex flex-wrap items-center gap-1.5 bg-slate-50/80 p-1 rounded-lg border border-slate-100 shadow-sm">
+                      {/* Undo/Redo Group */}
+                      <div className="flex items-center bg-white rounded-md border border-slate-200 shadow-sm overflow-hidden">
                         <button 
                           onClick={undo}
                           disabled={history.length === 0}
-                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-30"
+                          className="p-1.5 hover:bg-slate-50 text-slate-500 hover:text-blue-600 transition-colors disabled:opacity-20 border-r border-slate-100"
                           title="Hoàn tác (Undo)"
                         >
-                          <Undo2 size={12} />
+                          <Undo2 size={14} />
                         </button>
                         <button 
                           onClick={redo}
                           disabled={future.length === 0}
-                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-30"
+                          className="p-1.5 hover:bg-slate-50 text-slate-500 hover:text-blue-600 transition-colors disabled:opacity-20"
                           title="Làm lại (Redo)"
                         >
-                          <Redo2 size={12} />
+                          <Redo2 size={14} />
                         </button>
                       </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <div className="relative">
+
+                      {/* Formatting Group */}
+                      <div className="flex items-center gap-1.5">
+                        <div className="relative">
+                          <button
+                            onClick={() => setShowConvertMenu(!showConvertMenu)}
+                            className="h-8 flex items-center gap-1.5 text-[11px] font-bold text-slate-600 px-2.5 bg-white hover:bg-slate-50 rounded-md border border-slate-200 transition-all shadow-sm group"
+                          >
+                            <Type size={14} className="text-slate-400 group-hover:text-blue-500" />
+                            <span>Chuyển mã</span>
+                            <ChevronDown size={12} className={`text-slate-400 transition-transform ${showConvertMenu ? 'rotate-180' : ''}`} />
+                          </button>
+                          
+                          <AnimatePresence>
+                            {showConvertMenu && (
+                              <>
+                                <div className="fixed inset-0 z-30" onClick={() => setShowConvertMenu(false)}></div>
+                                <motion.div 
+                                  initial={{ opacity: 0, y: 5 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  exit={{ opacity: 0, y: 5 }}
+                                  className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-2xl py-1.5 w-44 z-40 overflow-hidden"
+                                >
+                                  <div className="px-3 py-1 mb-1 text-[9px] font-bold text-slate-400 uppercase tracking-widest">Định dạng chữ</div>
+                                  <button onClick={() => convertCase('upper')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-slate-700 font-medium transition-colors">IN HOA TẤT CẢ</button>
+                                  <button onClick={() => convertCase('lower')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-slate-700 transition-colors">in thường tất cả</button>
+                                  <button onClick={() => convertCase('sentence')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-slate-700 transition-colors">Viết hoa đầu dòng</button>
+                                  <button onClick={() => convertCase('no-accent')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-slate-700 transition-colors">bo dau tieng viet</button>
+                                  <div className="h-[1px] bg-slate-100 my-1.5"></div>
+                                  <div className="px-3 py-1 mb-1 text-[9px] font-bold text-slate-400 uppercase tracking-widest">Khắc phục lỗi</div>
+                                  <button onClick={() => convertEncoding('tcvn3')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-blue-600 font-bold transition-colors">Fix lỗi font TCVN3</button>
+                                  <button onClick={() => convertEncoding('vni')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-blue-600 font-bold transition-colors">Fix lỗi font VNI</button>
+                                </motion.div>
+                              </>
+                            )}
+                          </AnimatePresence>
+                        </div>
+
                         <button
-                          onClick={() => setShowConvertMenu(!showConvertMenu)}
-                          className="flex items-center gap-1 text-[11px] font-semibold text-slate-600 px-2 py-0.5 bg-slate-50 hover:bg-slate-100 rounded border border-slate-200 transition-all shadow-sm"
+                          onClick={() => setFormData(prev => ({ ...prev, boldLevel: (prev.boldLevel + 1) % 4 }))}
+                          className={`h-8 flex items-center gap-2 text-[11px] font-bold px-3 rounded-md border transition-all shadow-sm shrink-0 ${
+                            formData.boldLevel > 0 
+                            ? 'bg-blue-50 border-blue-200 text-blue-700' 
+                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                          title={`Tô đậm tiêu đề (Mức ${formData.boldLevel}/3)`}
                         >
-                          <Type size={12} />
-                          Chuyển mã
-                          <ChevronDown size={10} className={`transition-transform ${showConvertMenu ? 'rotate-180' : ''}`} />
+                          <Type size={14} className={formData.boldLevel > 0 ? 'font-bold' : ''} />
+                          <span>Tiêu đề B {formData.boldLevel > 0 ? `(${formData.boldLevel})` : ''}</span>
                         </button>
-                        
-                        <AnimatePresence>
-                          {showConvertMenu && (
-                            <>
-                              <div className="fixed inset-0 z-10" onClick={() => setShowConvertMenu(false)}></div>
-                              <motion.div 
-                                initial={{ opacity: 0, y: 5 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 5 }}
-                                className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl py-1 w-40 z-20 overflow-hidden"
-                              >
-                                <button onClick={() => convertCase('upper')} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 text-slate-700 font-medium">IN HOA TẤT CẢ</button>
-                                <button onClick={() => convertCase('lower')} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 text-slate-700">in thường tất cả</button>
-                                <button onClick={() => convertCase('sentence')} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 text-slate-700">Viết hoa đầu dòng</button>
-                                <button onClick={() => convertCase('no-accent')} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 text-slate-700">bo dau tieng viet</button>
-                                <div className="h-[1px] bg-slate-100 my-1"></div>
-                                <button onClick={() => convertEncoding('tcvn3')} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 text-blue-600 font-medium">Fix lỗi font TCVN3</button>
-                                <button onClick={() => convertEncoding('vni')} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 text-blue-600 font-medium">Fix lỗi font VNI</button>
-                              </motion.div>
-                            </>
-                          )}
-                        </AnimatePresence>
                       </div>
 
-                      <button
-                        onClick={() => setFormData(prev => ({ ...prev, boldLevel: (prev.boldLevel + 1) % 4 }))}
-                        className={`flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded border transition-all shadow-sm shrink-0 ${
-                          formData.boldLevel > 0 
-                          ? 'bg-amber-50 border-amber-200 text-amber-700' 
-                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                        }`}
-                        title={`Tô đậm tiêu đề (Mức ${formData.boldLevel}/3)`}
-                      >
-                        <Type size={12} className={formData.boldLevel > 0 ? 'font-bold' : ''} />
-                        Tiêu đề B {formData.boldLevel > 0 ? `(${formData.boldLevel})` : ''}
-                      </button>
+                      {/* AI Utilities Group */}
+                      <div className="flex items-center gap-1.5 border-l border-slate-200 pl-1.5 ml-0.5">
+                        <button
+                          onClick={checkSpellWithAI}
+                          disabled={isCheckingSpell || !formData.content.trim()}
+                          className="h-8 flex items-center gap-2 text-[11px] font-bold text-emerald-700 px-3 bg-emerald-50 hover:bg-emerald-100 rounded-md border border-emerald-200 transition-all disabled:opacity-40 group shadow-sm shrink-0"
+                        >
+                          {isCheckingSpell ? (
+                            <Loader2 size={14} className="animate-spin text-emerald-500" />
+                          ) : (
+                            <CheckCircle2 size={14} className="text-emerald-500 group-hover:scale-110 transition-transform" />
+                          )}
+                          <span>{isCheckingSpell ? 'Đang check...' : 'Sửa lỗi chính tả'}</span>
+                        </button>
 
-                      <button
-                        onClick={checkSpellWithAI}
-                        disabled={isCheckingSpell || !formData.content.trim()}
-                        className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-600 px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-all disabled:opacity-50 group shadow-sm shrink-0"
-                      >
-                        {isCheckingSpell ? (
-                          <Loader2 size={12} className="animate-spin text-emerald-500" />
-                        ) : (
-                          <CheckCircle2 size={12} className="text-emerald-500 group-hover:scale-110 transition-transform" />
-                        )}
-                        {isCheckingSpell ? 'Đang check...' : 'Sửa lỗi chính tả'}
-                      </button>
-
-                      <button
-                        onClick={cleanContentWithAI}
-                        disabled={isCleaning || !formData.content.trim()}
-                        className="flex items-center gap-1.5 text-[11px] font-semibold text-blue-600 px-2 py-0.5 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200 transition-all disabled:opacity-50 disabled:bg-slate-50 disabled:border-slate-200 disabled:text-slate-400 group shadow-sm shrink-0"
-                      >
-                        {isCleaning ? (
-                          <Loader2 size={12} className="animate-spin text-blue-500" />
-                        ) : (
-                          <Sparkles size={12} className="text-blue-500 group-hover:scale-110 transition-transform" />
-                        )}
-                        {isCleaning ? 'Đang xử lý...' : 'AI Tối ưu văn bản'}
-                      </button>
+                        <button
+                          onClick={cleanContentWithAI}
+                          disabled={isCleaning || !formData.content.trim()}
+                          className="h-8 flex items-center gap-2 text-[11px] font-bold text-blue-700 px-3 bg-blue-50 hover:bg-blue-100 rounded-md border border-blue-200 transition-all disabled:opacity-40 group shadow-sm shrink-0"
+                        >
+                          {isCleaning ? (
+                            <Loader2 size={14} className="animate-spin text-blue-500" />
+                          ) : (
+                            <Sparkles size={14} className="text-blue-500 group-hover:scale-110 transition-transform" />
+                          )}
+                          <span>{isCleaning ? 'Đang xử lý...' : 'AI Tối ưu văn bản'}</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <textarea 
