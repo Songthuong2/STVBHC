@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   FileText, 
@@ -56,9 +57,20 @@ import {
   User
 } from './lib/firebase';
 
-// Initialize Gemini AI
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+// Initialize Gemini AI (Lazy initialization)
+let genAIInstance: GoogleGenAI | null = null;
+
+const getGenAI = () => {
+  if (!genAIInstance) {
+    // Ưu tiên lấy từ biến VITE_ như người dùng đã đặt trong ảnh
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error('Chưa cấu hình API Key. Vui lòng đặt biến VITE_GEMINI_API_KEY trong phần Settings.');
+    }
+    genAIInstance = new GoogleGenAI({ apiKey });
+  }
+  return genAIInstance;
+};
 
 interface DocMargins {
   top: number;
@@ -457,7 +469,20 @@ export default function App() {
     }
   };
 
-  const applyTemplate = (template: DocTemplate) => {
+  const applyTemplate = (template: DocTemplate | any) => {
+    // If it's a legacy template (TEMPLATES) or system template with 'data'
+    if (template.data) {
+      pushToHistory(formData.content);
+      setFormData(prev => ({
+        ...prev,
+        ...template.data
+      }));
+      setActiveTemplate(template.id);
+      setShowTemplateModal(false);
+      return;
+    }
+
+    // New template structure
     setSelectedTemplate(template);
     setFormData(prev => ({
       ...prev,
@@ -466,7 +491,7 @@ export default function App() {
     
     // Initialize custom field values
     const initialValues: Record<string, string> = {};
-    template.fields.forEach(f => {
+    template.fields.forEach((f: any) => {
       initialValues[f.id] = '';
     });
     setCustomFieldValues(initialValues);
@@ -496,15 +521,19 @@ export default function App() {
     }
   };
 
-  const callAI = async (prompt: string) => {
+  const callAI = async (prompt: string, isJson: boolean = false) => {
     try {
-      if (!GEMINI_API_KEY) {
-        throw new Error('Chưa cấu hình GEMINI_API_KEY');
+      const ai = getGenAI();
+      
+      const config: any = {};
+      if (isJson) {
+        config.responseMimeType = "application/json";
       }
 
-      const response = await genAI.models.generateContent({
+      const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: prompt
+        contents: prompt,
+        config
       });
 
       if (!response.text) {
@@ -512,8 +541,15 @@ export default function App() {
       }
 
       return response.text;
-    } catch (error) {
+    } catch (error: any) {
       console.error('AI Error:', error);
+      const message = error.message || String(error);
+      if (message.includes('API_KEY_INVALID')) {
+        throw new Error('API Key không hợp lệ. Vui lòng kiểm tra lại cấu hình.');
+      }
+      if (message.includes('quota')) {
+        throw new Error('Hết hạn mức sử dụng AI (Quota exceeded). Thử lại sau.');
+      }
       throw error;
     }
   };
@@ -521,13 +557,16 @@ export default function App() {
   const parseDocumentWithAI = async (text: string) => {
     setIsGenerating(true);
     try {
+      // Giới hạn độ dài văn bản để tránh lỗi token quá lớn (khoảng 15k ký tự)
+      const truncatedText = text.length > 15000 ? text.substring(0, 15000) + "..." : text;
+
       const prompt = `Phân tích văn bản hành chính sau và tách thành các trường dữ liệu JSON.
       Yêu cầu cực kỳ quan trọng:
       1. Trích xuất đầy đủ và trọn vẹn TOÀN BỘ phần nội dung chính của văn bản vào trường "content". KHÔNG ĐƯỢC TÓM TẮT, KHÔNG ĐƯỢC BỎ SÓT bất kỳ dòng nào trong phần nội dung.
       2. Các trường cần tìm: 
          - agencyName: Tên cơ quan ban hành.
          - docNumber: Số hiệu văn bản.
-         - nationalTitle: Quốc hiệu (CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM).
+         - nationalTitle: Quốc hiệu (CỘNG HÀA XÃ HỘI CHỦ NGHĨA VIỆT NAM).
          - motto: Tiêu ngữ (Độc lập - Tự do - Hạnh phúc).
          - locationDate: Địa danh, ngày tháng năm.
          - title: Tên loại văn bản và trích yếu nội dung.
@@ -535,12 +574,12 @@ export default function App() {
          - signerPosition: Chức vụ người ký.
          - signerName: Họ tên người ký.
       3. Nếu không tìm thấy trường cụ thể, hãy để trống "".
-      4. Chỉ trả về JSON nguyên bản, không giải thích.
+      4. Chỉ trả về JSON nguyên bản.
 
       Văn bản cần phân tích:
-      ${text}`;
+      ${truncatedText}`;
 
-      const resultText = await callAI(prompt);
+      const resultText = await callAI(prompt, true);
       
       try {
         const cleanedJson = resultText.replace(/```json|```/g, '').trim();
@@ -555,14 +594,15 @@ export default function App() {
         pushToHistory(formData.content);
         setFormData(prev => ({ ...prev, content: text }));
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error parsing with AI:', error);
-      alert('Có lỗi khi xử lý văn bản bằng AI. Đang hiển thị văn bản thô.');
+      alert(`Có lỗi khi xử lý văn bản bằng AI: ${error.message || 'Lỗi không xác định'}. Đang hiển thị văn bản thô.`);
       setFormData(prev => ({ ...prev, content: text }));
     } finally {
       setIsGenerating(false);
     }
   };
+
 
   const loadTemplate = (template: typeof TEMPLATES[0]) => {
     pushToHistory(formData.content);

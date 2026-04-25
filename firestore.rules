@@ -13,6 +13,10 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
     }
 
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
     // ---------------------------------------------------------
     // VALIDATION HELPERS
     // ---------------------------------------------------------
@@ -42,6 +46,7 @@ service cloud.firestore {
              (!('docType' in data) || (data.docType in ['standard', 'regulation'])) &&
              (!('fontFamily' in data) || (data.fontFamily is string && data.fontFamily.size() <= 128)) &&
              (!('boldLevel' in data) || (data.boldLevel is number)) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp)) &&
              (!('margins' in data) || (
                data.margins is map &&
                data.margins.top is number && data.margins.top >= 0 &&
@@ -49,6 +54,17 @@ service cloud.firestore {
                data.margins.left is number && data.margins.left >= 0 &&
                data.margins.right is number && data.margins.right >= 0
              ));
+    }
+
+    function isValidTemplate(data) {
+      return data.keys().hasAll(['userId', 'name', 'fields', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.name is string && data.name.size() <= 256 &&
+             data.fields is list && data.fields.size() <= 50 &&
+             data.createdAt is timestamp &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 1024)) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp)) &&
+             (!('config' in data) || (data.config is map));
     }
 
     // ---------------------------------------------------------
@@ -61,29 +77,33 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get: if isOwner(userId);
-      allow create: if isOwner(userId) && isValidUser(incoming());
-      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidId(userId) && isValidUser(incoming()) && 
                     incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'lastLogin']);
     }
 
     match /documents/{documentId} {
-      allow get: if isOwner(existing().userId);
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && isValidDocument(incoming()) && incoming().createdAt == request.time;
-      allow update: if isOwner(existing().userId) && isValidDocument(incoming()) && 
+      allow get: if isOwner(existing().userId) && isValidId(documentId);
+      allow list: if isVerified() && resource.data.userId == request.auth.uid;
+      allow create: if isVerified() && isValidId(documentId) && isValidDocument(incoming()) && incoming().createdAt == request.time;
+      allow update: if isOwner(existing().userId) && isValidId(documentId) && isValidDocument(incoming()) && 
                     incoming().userId == existing().userId &&
                     incoming().createdAt == existing().createdAt &&
-                    incoming().updatedAt == request.time;
-      allow delete: if isOwner(existing().userId);
+                    incoming().diff(existing()).affectedKeys().hasAny(['title', 'content', 'nationalTitle', 'motto', 'agencyName', 'docNumber', 'locationDate', 'recipient', 'signerPosition', 'signerName', 'docType', 'fontFamily', 'boldLevel', 'margins', 'updatedAt']) &&
+                    (!('updatedAt' in incoming()) || incoming().updatedAt == request.time);
+      allow delete: if isOwner(existing().userId) && isValidId(documentId);
     }
 
     match /templates/{templateId} {
-      allow get: if isOwner(existing().userId);
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && incoming().userId == request.auth.uid && incoming().createdAt == request.time;
-      allow update: if isOwner(existing().userId) && incoming().userId == existing().userId;
-      allow delete: if isOwner(existing().userId);
+      allow get: if isOwner(existing().userId) && isValidId(templateId);
+      allow list: if isVerified() && resource.data.userId == request.auth.uid;
+      allow create: if isVerified() && isValidId(templateId) && isValidTemplate(incoming()) && incoming().createdAt == request.time;
+      allow update: if isOwner(existing().userId) && isValidId(templateId) && isValidTemplate(incoming()) && 
+                    incoming().userId == existing().userId &&
+                    incoming().createdAt == existing().createdAt &&
+                    (!('updatedAt' in incoming()) || incoming().updatedAt == request.time);
+      allow delete: if isOwner(existing().userId) && isValidId(templateId);
     }
   }
 }
