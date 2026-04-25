@@ -1,17 +1,93 @@
-import React, { useState, useRef } from 'react';
-import { FileText, Download, Settings, CheckCircle2, Loader2, Eye, X, RotateCcw, Sparkles, Type, ChevronDown, Undo2, Redo2, Layout, Upload, Maximize, Minimize } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { 
+  FileText, 
+  Download, 
+  Settings, 
+  CheckCircle2, 
+  Loader2, 
+  Eye, 
+  X, 
+  RotateCcw, 
+  Sparkles, 
+  Type as TypeIcon, 
+  ChevronDown, 
+  Undo2, 
+  Redo2, 
+  Layout, 
+  Upload, 
+  Maximize, 
+  Minimize, 
+  Save, 
+  History, 
+  LogIn, 
+  LogOut, 
+  User as UserIcon, 
+  AlignCenter,
+  AlignLeft,
+  Trash2 
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { saveAs } from 'file-saver';
-import { GoogleGenAI } from "@google/genai";
 import mammoth from 'mammoth';
+import { GoogleGenAI } from "@google/genai";
+import { 
+  auth, 
+  db, 
+  googleProvider, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged, 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs, 
+  query, 
+  where, 
+  orderBy, 
+  serverTimestamp, 
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  handleFirestoreError,
+  OperationType,
+  Timestamp,
+  User
+} from './lib/firebase';
 
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Initialize Gemini AI
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 interface DocMargins {
   top: number;
   bottom: number;
   left: number;
   right: number;
+}
+
+interface DocTemplateField {
+  id: string;
+  label: string;
+  placeholder: string;
+  type: 'text' | 'textarea' | 'date';
+}
+
+interface DocTemplate {
+  id?: string;
+  userId: string;
+  name: string;
+  description: string;
+  fields: DocTemplateField[];
+  config: {
+    fontFamily: string;
+    margins: DocMargins;
+    boldLevel: number;
+    alignLevel: number;
+    docType: 'standard' | 'regulation';
+  };
+  createdAt: any;
 }
 
 interface DocFormData {
@@ -30,6 +106,7 @@ interface DocFormData {
   margins: DocMargins;
   fontFamily: string;
   boldLevel: number;
+  alignLevel: number;
 }
 
 const INITIAL_DATA: DocFormData = {
@@ -47,7 +124,8 @@ const INITIAL_DATA: DocFormData = {
   docType: 'standard',
   margins: { top: 2, bottom: 2, left: 3, right: 2 },
   fontFamily: "Times New Roman",
-  boldLevel: 0
+  boldLevel: 0,
+  alignLevel: 0
 };
 
 const TEMPLATES = [
@@ -111,28 +189,69 @@ const TEMPLATES = [
       signerPosition: "THỦ TRƯỞNG ĐƠN VỊ",
       signerName: "NGUYỄN VĂN A"
     }
+  },
+  {
+    id: 'giay-moi',
+    title: 'Giấy mời',
+    description: 'Dùng để mời họp, tham dự hội nghị, sự kiện...',
+    data: {
+      title: "GIẤY MỜI\nTham dự Hội nghị sơ kết công tác 6 tháng đầu năm 2024",
+      docNumber: "88/GM-UBND",
+      content: "Ủy ban nhân dân thành phố trân trọng kính mời:\n....................................................................................................................................\n\nTới dự Hội nghị sơ kết công tác 6 tháng đầu năm và triển khai nhiệm vụ 6 tháng cuối năm 2024.\n\nThời gian: Vào hồi 08 giờ 30, ngày 15 tháng 7 năm 2024 (Thứ Hai).\nĐịa điểm: Hội trường tầng 3, Trụ sở UBND Thành phố.\nChủ trì: Lãnh đạo Ủy ban nhân dân thành phố.\n\nĐề nghị các đại biểu sắp xếp thời gian tham dự đầy đủ, đúng giờ để Hội nghị đạt kết quả tốt./.",
+      signerPosition: "CHÁNH VĂN PHÒNG",
+      signerName: "TRẦN VĂN E"
+    }
   }
 ];
 
-const isHeading = (line: string, boldLevel: number) => {
+const SYSTEM_TEMPLATES: DocTemplate[] = [
+  {
+    userId: 'system',
+    name: 'Giấy mời (Mẫu chuẩn)',
+    description: 'Mẫu giấy mời họp chuyên nghiệp với đầy đủ các trường thông tin quy định.',
+    fields: [
+      { id: 'recipient', label: 'Kính mời', placeholder: 'Nhập tên đơn vị hoặc cá nhân được mời', type: 'text' },
+      { id: 'event', label: 'Nội dung/Lý do', placeholder: 'VD: Hội nghị sơ kết công tác 6 tháng đầu năm...', type: 'textarea' },
+      { id: 'time', label: 'Thời gian (Giờ)', placeholder: 'VD: 08 giờ 30', type: 'text' },
+      { id: 'date', label: 'Ngày tháng', placeholder: '', type: 'date' },
+      { id: 'location', label: 'Địa điểm', placeholder: 'VD: Hội trường A, Trụ sở UBND...', type: 'text' },
+      { id: 'organizer', label: 'Cơ quan tổ chức', placeholder: 'VD: Văn phòng UBND Thành phố', type: 'text' }
+    ],
+    config: {
+      fontFamily: "Times New Roman",
+      margins: { top: 2, bottom: 2, left: 3, right: 2 },
+      boldLevel: 2,
+      alignLevel: 1,
+      docType: 'standard'
+    },
+    createdAt: null
+  }
+];
+
+const getHeadingLevel = (line: string) => {
   const trimmed = line.trim();
-  if (!trimmed) return false;
+  if (!trimmed) return 0;
 
-  // Cải tiến nhận diện tiêu đề in hoa hoàn toàn
+  // All Caps is level 100
   const isAllCaps = trimmed.length > 3 && trimmed === trimmed.toUpperCase() && /[A-Z]/.test(trimmed);
-  if (isAllCaps) return true;
-
-  if (boldLevel === 0) return false;
+  if (isAllCaps) return 100;
 
   const romanPattern = /^(I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV|PHẦN|CHƯƠNG|MỤC|TIỂU\s+MỤC|ĐIỀU)\.?\s/i;
   const arabicPattern = /^[0-9]+\.\s/;
   const letterPattern = /^[a-z]\)\s/;
 
-  if (boldLevel >= 1 && romanPattern.test(trimmed)) return true;
-  if (boldLevel >= 2 && arabicPattern.test(trimmed)) return true;
-  if (boldLevel >= 3 && letterPattern.test(trimmed)) return true;
+  if (romanPattern.test(trimmed)) return 1;
+  if (arabicPattern.test(trimmed)) return 2;
+  if (letterPattern.test(trimmed)) return 3;
 
-  return false;
+  return 0;
+};
+
+const isHeading = (line: string, boldLevel: number) => {
+  const level = getHeadingLevel(line);
+  if (level === 100) return true;
+  if (boldLevel === 0) return false;
+  return level > 0 && level <= boldLevel;
 };
 
 export default function App() {
@@ -143,13 +262,217 @@ export default function App() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showConvertMenu, setShowConvertMenu] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const [future, setFuture] = useState<string[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [savedDocuments, setSavedDocuments] = useState<any[]>([]);
+  const [templates, setTemplates] = useState<DocTemplate[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<DocTemplate | null>(null);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [isManagingTemplates, setIsManagingTemplates] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<DocTemplate | null>(null);
+  const [isLoadingDocs, setIsLoadingDocs] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        // Sync user profile
+        syncUserProfile(currentUser);
+      } else {
+        setSavedDocuments([]);
+        setTemplates([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      const qDocs = query(
+        collection(db, 'documents'),
+        where('userId', '==', user.uid),
+        orderBy('createdAt', 'desc')
+      );
+
+      const unsubDocs = onSnapshot(qDocs, (snapshot) => {
+        const docs = snapshot.docs.map(d => ({
+          id: d.id,
+          ...d.data()
+        }));
+        setSavedDocuments(docs);
+      }, (error) => {
+        console.error('Error fetching docs:', error);
+      });
+
+      const qTemplates = query(
+        collection(db, 'templates'),
+        where('userId', '==', user.uid),
+        orderBy('createdAt', 'desc')
+      );
+
+      const unsubTemplates = onSnapshot(qTemplates, (snapshot) => {
+        const teps = snapshot.docs.map(d => ({
+          id: d.id,
+          ...d.data()
+        })) as DocTemplate[];
+        setTemplates(teps);
+      }, (error) => {
+        console.error('Error fetching templates:', error);
+      });
+
+      return () => {
+        unsubDocs();
+        unsubTemplates();
+      };
+    }
+  }, [user]);
+
+  const syncUserProfile = async (currentUser: User) => {
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      await setDoc(userRef, {
+        email: currentUser.email,
+        displayName: currentUser.displayName,
+        photoURL: currentUser.photoURL,
+        lastLogin: serverTimestamp()
+      }, { merge: true });
+    } catch (error) {
+      console.error('Error syncing user profile:', error);
+    }
+  };
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error: any) {
+      if (error.code === 'auth/popup-closed-by-user') {
+        console.log('User closed the login popup.');
+        return;
+      }
+      console.error('Login error:', error);
+      alert(`Đăng nhập thất bại: ${error.message || 'Lỗi không xác định'}`);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
+
+  const saveDocument = async () => {
+    if (!user) {
+      handleLogin();
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const docData = {
+        ...formData,
+        userId: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+
+      await addDoc(collection(db, 'documents'), docData);
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'documents');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const loadSavedDocument = (savedDoc: any) => {
+    const { id, userId, createdAt, updatedAt, ...rest } = savedDoc;
+    setFormData(rest);
+    setShowHistoryModal(false);
+  };
+
+  const deleteDocument = async (docId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Bạn có chắc muốn xóa văn bản này?')) return;
+
+    try {
+      await deleteDoc(doc(db, 'documents', docId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `documents/${docId}`);
+    }
+  };
+
+  const saveTemplate = async () => {
+    if (!user) {
+      handleLogin();
+      return;
+    }
+
+    if (!editingTemplate?.name) {
+      alert('Vui lòng nhập tên mẫu');
+      return;
+    }
+
+    try {
+      const templateData = {
+        ...editingTemplate,
+        userId: user.uid,
+        createdAt: editingTemplate.id ? editingTemplate.createdAt : serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+
+      if (editingTemplate.id) {
+        await updateDoc(doc(db, 'templates', editingTemplate.id), templateData);
+      } else {
+        await addDoc(collection(db, 'templates'), templateData);
+      }
+      
+      setIsManagingTemplates(true);
+      setEditingTemplate(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'templates');
+    }
+  };
+
+  const deleteTemplate = async (templateId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Bạn có chắc muốn xóa mẫu này?')) return;
+
+    try {
+      await deleteDoc(doc(db, 'templates', templateId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `templates/${templateId}`);
+    }
+  };
+
+  const applyTemplate = (template: DocTemplate) => {
+    setSelectedTemplate(template);
+    setFormData(prev => ({
+      ...prev,
+      ...template.config
+    }));
+    
+    // Initialize custom field values
+    const initialValues: Record<string, string> = {};
+    template.fields.forEach(f => {
+      initialValues[f.id] = '';
+    });
+    setCustomFieldValues(initialValues);
+    
+    setShowTemplateModal(false);
+  };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -170,6 +493,28 @@ export default function App() {
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const callAI = async (prompt: string) => {
+    try {
+      if (!GEMINI_API_KEY) {
+        throw new Error('Chưa cấu hình GEMINI_API_KEY');
+      }
+
+      const response = await genAI.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt
+      });
+
+      if (!response.text) {
+        throw new Error('AI không trả về nội dung');
+      }
+
+      return response.text;
+    } catch (error) {
+      console.error('AI Error:', error);
+      throw error;
     }
   };
 
@@ -195,14 +540,10 @@ export default function App() {
       Văn bản cần phân tích:
       ${text}`;
 
-      const result = await genAI.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [{ role: "user", parts: [{ text: prompt }] }]
-      });
-      const responseText = result.text;
+      const resultText = await callAI(prompt);
       
       try {
-        const cleanedJson = responseText.replace(/```json|```/g, '').trim();
+        const cleanedJson = resultText.replace(/```json|```/g, '').trim();
         const parsedData = JSON.parse(cleanedJson);
         pushToHistory(formData.content);
         setFormData(prev => ({
@@ -210,8 +551,7 @@ export default function App() {
           ...parsedData
         }));
       } catch (e) {
-        console.error('Failed to parse AI response as JSON:', responseText);
-        // Fallback: If AI fails to return proper JSON, at least put all text in content
+        console.error('Failed to parse AI response as JSON:', resultText);
         pushToHistory(formData.content);
         setFormData(prev => ({ ...prev, content: text }));
       }
@@ -269,24 +609,22 @@ export default function App() {
     pushToHistory(formData.content);
     setIsCleaning(true);
     try {
-      const result = await genAI.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Chuyển mã nội dung sau từ bảng mã ${from === 'tcvn3' ? 'TCVN3 (ABC)' : 'VNI-Windows'} sang Unicode.
+      const prompt = `Chuyển mã nội dung sau từ bảng mã ${from === 'tcvn3' ? 'TCVN3 (ABC)' : 'VNI-Windows'} sang Unicode.
         Đây là văn bản bị lỗi font chữ do sao chép từ tài liệu cũ.
         Yêu cầu:
         1. Phục hồi đúng tiếng Việt chuẩn Unicode.
         2. Chỉ trả về nội dung đã chuyển mã, không giải thích gì thêm.
         
         Nội dung lỗi font:
-        "${formData.content}"`,
-      });
+        "${formData.content}"`;
 
-      const convertedText = result.text;
+      const convertedText = await callAI(prompt);
       if (convertedText) {
         setFormData(prev => ({ ...prev, content: convertedText.trim() }));
       }
     } catch (error) {
       console.error('Error converting encoding:', error);
+      alert('Lỗi chuyển mã. Vui lòng thử lại sau.');
     } finally {
       setIsCleaning(false);
       setShowConvertMenu(false);
@@ -299,24 +637,22 @@ export default function App() {
     pushToHistory(formData.content);
     setIsCheckingSpell(true);
     try {
-      const result = await genAI.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Kiểm tra và sửa lỗi chính tả cho văn bản hành chính sau đây.
+      const prompt = `Kiểm tra và sửa lỗi chính tả cho văn bản hành chính sau đây.
         Yêu cầu:
         1. Sửa lỗi chính tả, lỗi đánh máy, lỗi đặt dấu câu.
         2. Giữ nguyên cấu trúc câu và ý nghĩa.
         3. Chỉ trả về nội dung đã sửa, không giải thích.
         
         Nội dung:
-        "${formData.content}"`,
-      });
+        "${formData.content}"`;
 
-      const fixedText = result.text;
+      const fixedText = await callAI(prompt);
       if (fixedText) {
         setFormData(prev => ({ ...prev, content: fixedText.trim() }));
       }
     } catch (error) {
       console.error('Error checking spell:', error);
+      alert('Lỗi kiểm tra chính tả. Vui lòng thử lại sau.');
     } finally {
       setIsCheckingSpell(false);
     }
@@ -348,24 +684,21 @@ export default function App() {
     pushToHistory(formData.content);
     setIsCleaning(true);
     try {
-      const response = await genAI.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Bạn là một chuyên gia về soạn thảo văn bản hành chính Việt Nam. Hãy làm sạch và chuẩn hóa nội dung văn bản sau đây.
-        
-        Yêu cầu nghiêm ngặt:
-        1. Loại bỏ khoảng trắng thừa, ký tự lạ, sửa lỗi chính tả.
-        2. NHẬN DIỆN VÀ ĐỊNH DẠNG DANH SÁCH:
-           - Các mục lớn phải đánh số thứ tự kèm dấu chấm (VD: 1., 2., 3.).
-           - Các mục con bên trong phải đánh thứ tự chữ cái kèm dấu đóng ngoặc (VD: a), b), c)).
-           - Đảm bảo tính logic và liên tục của các số thứ tự.
-        3. CĂN CHỈNH VĂN PHONG: Sử dụng ngôn từ trang trọng, khách quan, đúng chuẩn Nghị định 78/2025/NĐ-CP.
-        4. Trả về DUY NHẤT nội dung đã được xử lý, không giải thích, không thêm tiêu đề hay ký hiệu khác.
+      const prompt = `Bạn là một chuyên gia về soạn thảo văn bản hành chính Việt Nam. Hãy làm sạch và chuẩn hóa nội dung văn bản sau đây.
+      
+      Yêu cầu nghiêm ngặt:
+      1. Loại bỏ khoảng trắng thừa, ký tự lạ, sửa lỗi chính tả.
+      2. NHẬN DIỆN VÀ ĐỊNH DẠNG DANH SÁCH:
+         - Các mục lớn phải đánh số thứ tự kèm dấu chấm (VD: 1., 2., 3.).
+         - Các mục con bên trong phải đánh thứ tự chữ cái kèm dấu đóng ngoặc (VD: a), b), c)).
+         - Đảm bảo tính logic và liên tục của các số thứ tự.
+      3. CĂN CHỈNH VĂN PHONG: Sử dụng ngôn từ trang trọng, khách quan, đúng chuẩn Nghị định 78/2025/NĐ-CP.
+      4. Trả về DUY NHẤT nội dung đã được xử lý, không giải thích, không thêm tiêu đề hay ký hiệu khác.
 
-        Nội dung cần xử lý:
-        "${formData.content}"`,
-      });
+      Nội dung cần xử lý:
+      "${formData.content}"`;
 
-      const cleanedText = response.text;
+      const cleanedText = await callAI(prompt);
       if (cleanedText) {
         setFormData(prev => ({ ...prev, content: cleanedText.trim() }));
       }
@@ -468,6 +801,9 @@ export default function App() {
       <div className="text-[14px] leading-relaxed text-justify mb-16 whitespace-pre-wrap">
         {formData.content.split('\n').map((line, i) => {
           const isLineHeading = isHeading(line, formData.boldLevel);
+          const headLevel = getHeadingLevel(line);
+          const shouldCenter = (headLevel === 100) || (formData.alignLevel > 0 && headLevel > 0 && headLevel <= formData.alignLevel);
+
           return (
             <p 
               key={i} 
@@ -475,7 +811,7 @@ export default function App() {
               style={{ 
                 textIndent: (line.trim() && !isLineHeading) ? '1.27cm' : '0',
                 marginBottom: line.trim() ? '6pt' : '0',
-                textAlign: (line.trim() === line.trim().toUpperCase() && line.trim().length > 3) ? 'center' : 'justify'
+                textAlign: shouldCenter ? 'center' : 'justify'
               }}
             >
               {line}
@@ -534,6 +870,57 @@ export default function App() {
             accept=".docx" 
             className="hidden" 
           />
+          
+          {user ? (
+            <div className="flex items-center gap-2 mr-2">
+              <div className="hidden md:flex flex-col items-end mr-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter leading-none">Tài khoản</span>
+                <span className="text-xs font-semibold text-slate-700">{user.displayName}</span>
+              </div>
+              <div className="relative group">
+                <img 
+                  src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
+                  alt="Avatar" 
+                  className="w-9 h-9 rounded-full border-2 border-white shadow-sm ring-1 ring-slate-200 cursor-pointer"
+                />
+                <div className="absolute top-full right-0 mt-2 w-48 bg-white border border-slate-200 rounded-xl shadow-xl py-1 invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-all z-50">
+                  <div className="px-4 py-2 border-b border-slate-100 mb-1">
+                    <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest mb-0.5">Hội viên</p>
+                    <p className="text-xs font-bold text-slate-800 truncate">{user.email}</p>
+                  </div>
+                  <button 
+                    onClick={() => setShowHistoryModal(true)}
+                    className="w-full text-left px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 flex items-center gap-2"
+                  >
+                    <History size={14} /> Văn bản đã lưu
+                  </button>
+                  <button 
+                    onClick={() => setShowTemplateModal(true)}
+                    className="w-full text-left px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 flex items-center gap-2"
+                  >
+                    <Layout size={14} /> Quản lý mẫu
+                  </button>
+                  <button 
+                    onClick={handleLogout}
+                    className="w-full text-left px-4 py-2 text-xs font-medium text-red-600 hover:bg-red-50 flex items-center gap-2"
+                  >
+                    <LogOut size={14} /> Đăng xuất
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <button 
+              onClick={handleLogin}
+              className="p-2 md:px-4 md:py-2 bg-blue-50 text-blue-600 border border-blue-100 rounded text-sm font-bold hover:bg-blue-100 transition-colors flex items-center gap-2 mr-2"
+            >
+              <LogIn size={16} />
+              <span>Đăng nhập</span>
+            </button>
+          )}
+
+          <div className="h-10 w-[1px] bg-slate-200 mx-1 hidden sm:block"></div>
+
           <button 
             onClick={() => setIsFullscreen(!isFullscreen)}
             className={`p-2 md:px-4 md:py-2 rounded text-sm font-medium transition-all flex items-center gap-2 shadow-sm border ${
@@ -578,6 +965,15 @@ export default function App() {
           >
             <Eye size={16} />
             <span>Xem trước</span>
+          </button>
+          <button 
+            onClick={saveDocument}
+            disabled={isSaving}
+            className="px-3 py-2 md:px-4 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-sm font-semibold hover:bg-emerald-100 transition-all flex items-center gap-2 disabled:opacity-50"
+            title="Lưu văn bản vào đám mây"
+          >
+            {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            <span className="hidden sm:inline">Lưu Cloud</span>
           </button>
           <button 
             onClick={generateWord}
@@ -777,6 +1173,14 @@ export default function App() {
                 <div className="space-y-1">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nội dung chi tiết</label>
+                    {selectedTemplate && (
+                      <button 
+                        onClick={() => setSelectedTemplate(null)}
+                        className="text-[10px] font-bold text-red-500 hover:bg-red-50 px-2 py-1 rounded transition-all uppercase tracking-tighter"
+                      >
+                        Hủy sử dụng mẫu: {selectedTemplate.name}
+                      </button>
+                    )}
                     <div className="flex flex-wrap items-center gap-1.5 bg-slate-50/80 p-1 rounded-lg border border-slate-100 shadow-sm">
                       {/* Undo/Redo Group */}
                       <div className="flex items-center bg-white rounded-md border border-slate-200 shadow-sm overflow-hidden">
@@ -805,7 +1209,7 @@ export default function App() {
                             onClick={() => setShowConvertMenu(!showConvertMenu)}
                             className="h-8 flex items-center gap-1.5 text-[11px] font-bold text-slate-600 px-2.5 bg-white hover:bg-slate-50 rounded-md border border-slate-200 transition-all shadow-sm group"
                           >
-                            <Type size={14} className="text-slate-400 group-hover:text-blue-500" />
+                            <TypeIcon size={14} className="text-slate-400 group-hover:text-blue-500" />
                             <span>Chuyển mã</span>
                             <ChevronDown size={12} className={`text-slate-400 transition-transform ${showConvertMenu ? 'rotate-180' : ''}`} />
                           </button>
@@ -844,8 +1248,21 @@ export default function App() {
                           }`}
                           title={`Tô đậm tiêu đề (Mức ${formData.boldLevel}/3)`}
                         >
-                          <Type size={14} className={formData.boldLevel > 0 ? 'font-bold' : ''} />
+                          <TypeIcon size={14} className={formData.boldLevel > 0 ? 'font-bold' : ''} />
                           <span>Tiêu đề B {formData.boldLevel > 0 ? `(${formData.boldLevel})` : ''}</span>
+                        </button>
+
+                        <button
+                          onClick={() => setFormData(prev => ({ ...prev, alignLevel: (prev.alignLevel + 1) % 4 }))}
+                          className={`h-8 flex items-center gap-2 text-[11px] font-bold px-3 rounded-md border transition-all shadow-sm shrink-0 ${
+                            formData.alignLevel > 0 
+                            ? 'bg-amber-50 border-amber-200 text-amber-700' 
+                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                          title={`Căn lề giữa tiêu đề (Mức ${formData.alignLevel}/3)`}
+                        >
+                          {formData.alignLevel > 0 ? <AlignCenter size={14} /> : <AlignLeft size={14} />}
+                          <span>Lề giữa {formData.alignLevel > 0 ? `(${formData.alignLevel})` : ''}</span>
                         </button>
                       </div>
 
@@ -879,8 +1296,61 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  <textarea 
-                    name="content"
+                {selectedTemplate && (
+                  <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-2xl space-y-4 mb-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-bold text-emerald-800 uppercase tracking-widest flex items-center gap-2">
+                        <Layout size={14} />
+                        Các trường dữ liệu mẫu
+                      </h3>
+                      <p className="text-[10px] text-emerald-500 italic font-medium">Nhập thông tin theo cấu trúc đã định nghĩa</p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {selectedTemplate.fields.map(field => (
+                        <div key={field.id} className="space-y-1">
+                          <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">{field.label}</label>
+                          {field.type === 'textarea' ? (
+                            <textarea 
+                              value={customFieldValues[field.id] || ''}
+                              onChange={(e) => setCustomFieldValues(prev => ({ ...prev, [field.id]: e.target.value }))}
+                              placeholder={field.placeholder}
+                              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all min-h-[80px]"
+                            />
+                          ) : (
+                            <input 
+                              type={field.type}
+                              value={customFieldValues[field.id] || ''}
+                              onChange={(e) => setCustomFieldValues(prev => ({ ...prev, [field.id]: e.target.value }))}
+                              placeholder={field.placeholder}
+                              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <button 
+                      onClick={() => {
+                        let newContent = '';
+                        selectedTemplate.fields.forEach(f => {
+                          if (customFieldValues[f.id]) {
+                            newContent += `${f.label.toUpperCase()}:\n${customFieldValues[f.id]}\n\n`;
+                          }
+                        });
+                        if (newContent) {
+                          setFormData(prev => ({ ...prev, content: newContent }));
+                          setShowSuccess(true);
+                          setTimeout(() => setShowSuccess(false), 2000);
+                        }
+                      }}
+                      className="w-full py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all shadow-md shadow-emerald-600/10"
+                    >
+                      Cập nhật vào Nội dung chính
+                    </button>
+                  </div>
+                )}
+                
+                <textarea 
+                  name="content"
                     value={formData.content}
                     onChange={handleInputChange}
                     className="w-full h-48 lg:h-64 px-3 py-2 border border-slate-200 rounded text-sm resize-none focus:ring-2 focus:ring-blue-500 outline-none transition-all scroll-smooth"
@@ -1082,6 +1552,337 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {showTemplateModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="bg-white w-full max-w-4xl max-h-[80vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-slate-200"
+            >
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center">
+                    <Layout size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-800">Mẫu văn bản tùy chỉnh</h2>
+                    <p className="text-xs text-slate-500 font-medium">Tạo và quản lý các biểu mẫu hành chính định sẵn</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {!isManagingTemplates && (
+                    <button 
+                      onClick={() => {
+                        setEditingTemplate({
+                          userId: user?.uid || '',
+                          name: '',
+                          description: '',
+                          fields: [{ id: Math.random().toString(36).substr(2, 9), label: 'Trường mới', placeholder: '', type: 'text' }],
+                          config: { ...formData },
+                          createdAt: null
+                        });
+                        setIsManagingTemplates(true);
+                      }}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition-all flex items-center gap-2"
+                    >
+                      <Sparkles size={14} /> Thêm mẫu mới
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => {
+                      setShowTemplateModal(false);
+                      setIsManagingTemplates(false);
+                      setEditingTemplate(null);
+                    }}
+                    className="p-2 hover:bg-white rounded-full text-slate-400 hover:text-slate-600 transition-all border border-transparent hover:border-slate-200 shadow-sm"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar bg-[#fdfdfd]">
+                {isManagingTemplates && editingTemplate ? (
+                  <div className="space-y-6 max-w-2xl mx-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Tên mẫu</label>
+                        <input 
+                          value={editingTemplate.name}
+                          onChange={(e) => setEditingTemplate({...editingTemplate, name: e.target.value})}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                          placeholder="VD: Báo cáo tuần, Quyết định khen thưởng..."
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Mô tả</label>
+                        <input 
+                          value={editingTemplate.description}
+                          onChange={(e) => setEditingTemplate({...editingTemplate, description: e.target.value})}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                          placeholder="Mô tả mục đích của mẫu này"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-slate-800">Danh sách các trường nhập liệu</h3>
+                        <button 
+                          onClick={() => {
+                            const newFields = [...editingTemplate.fields, { id: Math.random().toString(36).substr(2, 9), label: 'Trường mới', placeholder: '', type: 'text' as any }];
+                            setEditingTemplate({...editingTemplate, fields: newFields});
+                          }}
+                          className="text-[10px] font-bold text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 transition-all uppercase tracking-widest"
+                        >
+                          + Thêm trường
+                        </button>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        {editingTemplate.fields.map((field, idx) => (
+                          <div key={field.id} className="flex flex-wrap items-center gap-2 p-3 bg-white border border-slate-100 rounded-xl shadow-sm">
+                            <input 
+                              value={field.label}
+                              onChange={(e) => {
+                                const newFields = [...editingTemplate.fields];
+                                newFields[idx].label = e.target.value;
+                                setEditingTemplate({...editingTemplate, fields: newFields});
+                              }}
+                              className="flex-1 min-w-[120px] text-xs font-bold border-b border-transparent focus:border-blue-300 outline-none py-1"
+                              placeholder="Nhãn trường"
+                            />
+                            <select 
+                              value={field.type}
+                              onChange={(e) => {
+                                const newFields = [...editingTemplate.fields];
+                                newFields[idx].type = e.target.value as any;
+                                setEditingTemplate({...editingTemplate, fields: newFields});
+                              }}
+                              className="text-[10px] font-bold text-slate-500 border border-slate-200 rounded-lg px-2 py-1 outline-none"
+                            >
+                              <option value="text">Dòng đơn</option>
+                              <option value="textarea">Đoạn văn</option>
+                              <option value="date">Ngày tháng</option>
+                            </select>
+                            <button 
+                              onClick={() => {
+                                const newFields = editingTemplate.fields.filter((_, i) => i !== idx);
+                                setEditingTemplate({...editingTemplate, fields: newFields});
+                              }}
+                              className="p-1.5 text-slate-300 hover:text-red-500 transition-colors"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3 pt-4">
+                      <button 
+                        onClick={() => setIsManagingTemplates(false)}
+                        className="flex-1 py-3 border border-slate-200 rounded-2xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all"
+                      >
+                        Hủy bỏ
+                      </button>
+                      <button 
+                        onClick={saveTemplate}
+                        className="flex-1 py-3 bg-blue-600 text-white rounded-2xl text-xs font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20"
+                      >
+                        Lưu mẫu văn bản
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {[...SYSTEM_TEMPLATES, ...templates].map((template, tIdx) => (
+                      <div 
+                        key={template.id || `system-${tIdx}`}
+                        className="group bg-white border border-slate-200 rounded-3xl p-5 hover:border-blue-400 hover:shadow-xl hover:shadow-blue-500/5 transition-all cursor-pointer relative flex flex-col"
+                        onClick={() => applyTemplate(template)}
+                      >
+                         <div className="flex items-start justify-between mb-3">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all shadow-sm ${template.userId === 'system' ? 'bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white' : 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white'}`}>
+                            <Layout size={20} />
+                          </div>
+                          {template.userId !== 'system' && (
+                            <div className="flex gap-1">
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingTemplate(template);
+                                  setIsManagingTemplates(true);
+                                }}
+                                className="p-2 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                              >
+                                <Settings size={14} />
+                              </button>
+                              <button 
+                                onClick={(e) => deleteTemplate(template.id!, e)}
+                                className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          )}
+                          {template.userId === 'system' && (
+                            <span className="text-[9px] font-black bg-amber-100 text-amber-700 px-2 py-1 rounded-full uppercase tracking-tighter">Hệ thống</span>
+                          )}
+                        </div>
+                        <h3 className="font-bold text-slate-800 text-sm mb-1 group-hover:text-blue-700 transition-colors uppercase tracking-tight">{template.name}</h3>
+                        <p className="text-xs text-slate-500 mb-4 line-clamp-2 leading-relaxed">
+                          {template.description || 'Không có mô tả'}
+                        </p>
+                        <div className="mt-auto pt-4 border-t border-slate-50 flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                            {template.fields.length} trường dữ liệu
+                          </span>
+                          <span className={`${template.userId === 'system' ? 'text-amber-500' : 'text-blue-500'} text-[10px] font-bold uppercase flex items-center gap-1`}>
+                            Sử dụng ngay <Sparkles size={10} />
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    <button 
+                      onClick={() => {
+                        setEditingTemplate({
+                          userId: user?.uid || '',
+                          name: '',
+                          description: '',
+                          fields: [{ id: Math.random().toString(36).substr(2, 9), label: 'Tiêu đề', placeholder: '', type: 'text' }],
+                          config: { ...formData },
+                          createdAt: null
+                        });
+                        setIsManagingTemplates(true);
+                      }}
+                      className="border-2 border-dashed border-slate-200 rounded-3xl p-6 flex flex-col items-center justify-center gap-3 hover:border-blue-400 hover:bg-blue-50/30 transition-all text-slate-400 hover:text-blue-500 group"
+                    >
+                      <div className="w-12 h-12 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center group-hover:bg-white group-hover:border-blue-100 transition-all">
+                        <Sparkles size={24} />
+                      </div>
+                      <span className="text-xs font-bold uppercase tracking-widest">Tạo mẫu mới</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+              
+              <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Sáng tạo không giới hạn với Mẫu văn bản</p>
+                {selectedTemplate && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-emerald-600 uppercase">Đang dùng mẫu: {selectedTemplate.name}</span>
+                    <button 
+                      onClick={() => setSelectedTemplate(null)}
+                      className="p-1 text-red-500 hover:bg-red-50 rounded"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showHistoryModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="bg-white w-full max-w-4xl max-h-[80vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-slate-200"
+            >
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center">
+                    <History size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-800">Văn bản đã lưu</h2>
+                    <p className="text-xs text-slate-500 font-medium">Danh sách các văn bản bạn đã lưu trên hệ thống cloud</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowHistoryModal(false)}
+                  className="p-2 hover:bg-white rounded-full text-slate-400 hover:text-slate-600 transition-all border border-transparent hover:border-slate-200 shadow-sm"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar bg-[#fdfdfd]">
+                {savedDocuments.length === 0 ? (
+                  <div className="h-64 flex flex-col items-center justify-center text-slate-400 gap-4">
+                    <div className="p-6 bg-slate-50 rounded-full">
+                      <FileText size={48} className="opacity-20" />
+                    </div>
+                    <div className="text-center">
+                      <p className="font-bold text-slate-500">Chưa có văn bản nào được lưu</p>
+                      <p className="text-xs">Hãy nhấn nút "Lưu Cloud" để lưu trữ văn bản của bạn</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {savedDocuments.map((docItem) => (
+                      <div 
+                        key={docItem.id}
+                        onClick={() => loadSavedDocument(docItem)}
+                        className="group bg-white border border-slate-200 rounded-2xl p-5 hover:border-emerald-300 hover:shadow-xl hover:shadow-emerald-500/5 transition-all cursor-pointer relative"
+                      >
+                        <div className="flex items-start justify-between mb-3">
+                          <div className="w-10 h-10 bg-slate-50 rounded-lg flex items-center justify-center text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-600 transition-colors">
+                            <FileText size={20} />
+                          </div>
+                          <button 
+                            onClick={(e) => deleteDocument(docItem.id, e)}
+                            className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                            title="Xóa văn bản"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                        <h3 className="font-bold text-slate-800 text-sm line-clamp-2 mb-1 group-hover:text-emerald-700 transition-colors">{docItem.title}</h3>
+                        <p className="text-xs text-slate-500 mb-4 line-clamp-2 leading-relaxed">
+                          {docItem.content.substring(0, 100)}...
+                        </p>
+                        <div className="flex items-center justify-between pt-4 border-t border-slate-50">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                            {docItem.createdAt?.toDate ? docItem.createdAt.toDate().toLocaleDateString('vi-VN') : 'Mới đây'}
+                          </span>
+                          <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                            {docItem.docType === 'regulation' ? 'Quy chuẩn' : 'Hành chính'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              
+              <div className="p-6 border-t border-slate-100 bg-slate-50/50 text-center">
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Dữ liệu được bảo mật bởi Google Firebase</p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Success Notification */}
       <AnimatePresence>
         {showSuccess && (
@@ -1089,10 +1890,10 @@ export default function App() {
             initial={{ opacity: 0, x: 50 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 50 }}
-            className="fixed top-20 right-4 md:right-8 bg-green-600 text-white px-6 py-3 rounded-lg shadow-2xl flex items-center gap-3 z-50 font-medium"
+            className="fixed top-20 right-4 md:right-8 bg-emerald-600 text-white px-6 py-3 rounded-lg shadow-2xl flex items-center gap-3 z-50 font-medium"
           >
             <CheckCircle2 size={24} />
-            Đã tải file thành công!
+            Thao tác thành công!
           </motion.div>
         )}
       </AnimatePresence>

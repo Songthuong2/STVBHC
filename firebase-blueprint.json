@@ -1,0 +1,96 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user profile information",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "lastLogin": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email"]
+    },
+    "Document": {
+      "title": "Administrative Document",
+      "description": "Stores generated administrative documents",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "nationalTitle": { "type": "string" },
+        "motto": { "type": "string" },
+        "agencyName": { "type": "string" },
+        "docNumber": { "type": "string" },
+        "locationDate": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "recipient": { "type": "string" },
+        "signerPosition": { "type": "string" },
+        "signerName": { "type": "string" },
+        "docType": { "type": "string", "enum": ["standard", "regulation"] },
+        "margins": {
+          "type": "object",
+          "properties": {
+            "top": { "type": "number" },
+            "bottom": { "type": "number" },
+            "left": { "type": "number" },
+            "right": { "type": "number" }
+          }
+        },
+        "fontFamily": { "type": "string" },
+        "boldLevel": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "content", "createdAt"]
+    },
+    "Template": {
+      "title": "Document Template",
+      "description": "User defined templates with custom fields",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "placeholder": { "type": "string" },
+              "type": { "type": "string", "enum": ["text", "textarea", "date"] }
+            }
+          }
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "fontFamily": { "type": "string" },
+            "margins": { "type": "object" },
+            "boldLevel": { "type": "number" },
+            "docType": { "type": "string" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "fields"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/documents/{documentId}": {
+      "schema": "Document",
+      "description": "Administrative documents"
+    },
+    "/templates/{templateId}": {
+      "schema": "Template",
+      "description": "Custom document templates"
+    }
+  }
+}

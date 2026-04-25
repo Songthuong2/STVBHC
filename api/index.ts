@@ -1,57 +1,66 @@
 import express from 'express';
 import cors from 'cors';
-import bodyParser from 'body-parser';
-import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
+import { GoogleGenAI } from "@google/genai";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
 
+// Increase payload limit for larger documents/AI requests
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json({ limit: '10mb' }));
 
 // Helper for cm to twips conversion (1 cm = 567 twips)
 const cmToTwips = (cm: number) => Math.round(cm * 567);
 
-const isHeading = (line: string, boldLevel: number) => {
+const getHeadingLevel = (line: string) => {
   const trimmed = line.trim();
-  if (!trimmed) return false;
+  if (!trimmed) return 0;
 
-  // Nhận diện dòng in hoa (thường là tiêu đề trung tâm hoặc tiêu đề lớn)
   const isAllCaps = trimmed.length > 3 && trimmed === trimmed.toUpperCase() && /[A-Z]/.test(trimmed);
-  if (isAllCaps) return true;
-
-  if (!boldLevel || boldLevel === 0) return false;
+  if (isAllCaps) return 100;
 
   const romanPattern = /^(I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV|PHẦN|CHƯƠNG|MỤC|TIỂU\s+MỤC|ĐIỀU)\.?\s/i;
   const arabicPattern = /^[0-9]+\.\s/;
   const letterPattern = /^[a-z]\)\s/;
 
-  if (boldLevel >= 1 && romanPattern.test(trimmed)) return true;
-  if (boldLevel >= 2 && arabicPattern.test(trimmed)) return true;
-  if (boldLevel >= 3 && letterPattern.test(trimmed)) return true;
+  if (romanPattern.test(trimmed)) return 1;
+  if (arabicPattern.test(trimmed)) return 2;
+  if (letterPattern.test(trimmed)) return 3;
 
-  return false;
+  return 0;
+};
+
+const isHeading = (line: string, boldLevel: number) => {
+  const level = getHeadingLevel(line);
+  if (level === 100) return true;
+  if (!boldLevel || boldLevel === 0) return false;
+  return level > 0 && level <= boldLevel;
 };
 
 app.post('/api/generate-docx', async (req, res) => {
   try {
     const {
-      nationalTitle,
-      motto,
-      agencyName,
-      docNumber,
-      locationDate,
-      title,
-      content,
-      recipient,
-      signerPosition,
-      signerName,
+      nationalTitle = "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM",
+      motto = "Độc lập - Tự do - Hạnh phúc",
+      agencyName = "",
+      docNumber = "",
+      locationDate = "",
+      title = "",
+      content = "",
+      recipient = "",
+      signerPosition = "",
+      signerName = "",
       docType = 'standard',
       margins = { top: 2, bottom: 2, left: 3, right: 2 },
       fontFamily = "Times New Roman",
-      boldLevel = 0
+      boldLevel = 0,
+      alignLevel = 0
     } = req.body;
 
     const doc = new Document({
@@ -174,10 +183,11 @@ app.post('/api/generate-docx', async (req, res) => {
           // Main Content
           ...content.split('\n').map((line: string) => {
             const isLineHeading = isHeading(line, boldLevel);
-            const isAllCaps = line.trim().length > 3 && line.trim() === line.trim().toUpperCase() && /[A-Z]/.test(line);
+            const headLevel = getHeadingLevel(line);
+            const shouldCenter = (headLevel === 100) || (alignLevel > 0 && headLevel > 0 && headLevel <= alignLevel);
             
             return new Paragraph({
-              alignment: isAllCaps ? AlignmentType.CENTER : AlignmentType.JUSTIFIED,
+              alignment: shouldCenter ? AlignmentType.CENTER : AlignmentType.JUSTIFIED,
               indent: (line.trim() && !isLineHeading) ? { firstLine: cmToTwips(1.27) } : undefined,
               spacing: { 
                 line: 360, 
@@ -264,35 +274,37 @@ app.post('/api/generate-docx', async (req, res) => {
     const buffer = await Packer.toBuffer(doc);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', 'attachment; filename=vanban_hanhchinh.docx');
+    res.setHeader('Content-Length', buffer.length.toString());
     res.send(buffer);
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to generate document' });
+    console.error('Docx generation error:', error);
+    res.status(500).json({ error: 'Failed to generate document: ' + (error as Error).message });
   }
 });
 
-if (process.env.NODE_ENV === 'production') {
-  const distPath = path.join(process.cwd(), 'dist');
-  app.use(express.static(distPath));
-  // API routes are handled above
-  app.get('*', (req, res, next) => {
-    // If it's an API route, don't serve index.html
-    if (req.path.startsWith('/api/')) return next();
-    res.sendFile(path.join(distPath, 'index.html'));
-  });
-} else {
-  // Low-level Vite middleware for development
+// Vite middleware for development
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
   createViteServer({
     server: { middlewareMode: true },
-    appType: "spa",
+    appType: 'spa',
   }).then((vite) => {
     app.use(vite.middlewares);
   });
+} else if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
+  // Static serving for local production test
+  const distPath = path.join(process.cwd(), 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
 }
 
+// For local/non-serverless environments
 if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
-  app.listen(PORT, "0.0.0.0", () => {
+  const PORT = 3000;
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ---------------------------------------------------------
+    // GLOBAL HELPERS
+    // ---------------------------------------------------------
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+
+    // ---------------------------------------------------------
+    // VALIDATION HELPERS
+    // ---------------------------------------------------------
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(['email']) &&
+             data.email is string && data.email.size() <= 256 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 256)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1024)) &&
+             (!('lastLogin' in data) || (data.lastLogin is timestamp));
+    }
+
+    function isValidDocument(data) {
+      return data.keys().hasAll(['userId', 'title', 'content', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.title is string && data.title.size() <= 512 &&
+             data.content is string && data.content.size() <= 100000 &&
+             data.createdAt is timestamp &&
+             (!('nationalTitle' in data) || (data.nationalTitle is string && data.nationalTitle.size() <= 256)) &&
+             (!('motto' in data) || (data.motto is string && data.motto.size() <= 256)) &&
+             (!('agencyName' in data) || (data.agencyName is string && data.agencyName.size() <= 512)) &&
+             (!('docNumber' in data) || (data.docNumber is string && data.docNumber.size() <= 128)) &&
+             (!('locationDate' in data) || (data.locationDate is string && data.locationDate.size() <= 256)) &&
+             (!('recipient' in data) || (data.recipient is string && data.recipient.size() <= 2048)) &&
+             (!('signerPosition' in data) || (data.signerPosition is string && data.signerPosition.size() <= 256)) &&
+             (!('signerName' in data) || (data.signerName is string && data.signerName.size() <= 256)) &&
+             (!('docType' in data) || (data.docType in ['standard', 'regulation'])) &&
+             (!('fontFamily' in data) || (data.fontFamily is string && data.fontFamily.size() <= 128)) &&
+             (!('boldLevel' in data) || (data.boldLevel is number)) &&
+             (!('margins' in data) || (
+               data.margins is map &&
+               data.margins.top is number && data.margins.top >= 0 &&
+               data.margins.bottom is number && data.margins.bottom >= 0 &&
+               data.margins.left is number && data.margins.left >= 0 &&
+               data.margins.right is number && data.margins.right >= 0
+             ));
+    }
+
+    // ---------------------------------------------------------
+    // COLLECTIONS
+    // ---------------------------------------------------------
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'lastLogin']);
+    }
+
+    match /documents/{documentId} {
+      allow get: if isOwner(existing().userId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidDocument(incoming()) && incoming().createdAt == request.time;
+      allow update: if isOwner(existing().userId) && isValidDocument(incoming()) && 
+                    incoming().userId == existing().userId &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().updatedAt == request.time;
+      allow delete: if isOwner(existing().userId);
+    }
+
+    match /templates/{templateId} {
+      allow get: if isOwner(existing().userId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && incoming().createdAt == request.time;
+      allow update: if isOwner(existing().userId) && incoming().userId == existing().userId;
+      allow delete: if isOwner(existing().userId);
+    }
+  }
+}
