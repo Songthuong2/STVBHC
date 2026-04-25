@@ -44,24 +44,22 @@ export const AITemplateAssistant: React.FC<AITemplateAssistantProps> = ({ onClos
     onClose();
   };
 
-  const handleSend = async () => {
-    if (!inputValue.trim() || isLoading) return;
+  const handleSend = async (overrideValue?: string) => {
+    const textToSend = overrideValue || inputValue;
+    if (!textToSend.trim() || isLoading) return;
 
-    const userMsg = inputValue;
     setInputValue('');
-    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setMessages(prev => [...prev, { role: 'user', content: textToSend }]);
     setIsLoading(true);
 
     try {
-      const userMsg = inputValue;
-      setInputValue('');
-      setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
-      setIsLoading(true);
-
       // Check if user is asking to edit content
-      if (onEditContent && (userMsg.toLowerCase().includes('sửa') || userMsg.toLowerCase().includes('chỉnh') || userMsg.toLowerCase().includes('viết lại'))) {
+      const editKeywords = ['sửa', 'chỉnh', 'viết lại', 'thêm', 'bớt', 'thay đổi', 'định dạng', 'tóm tắt', 'mở rộng', 'kiểm tra', 'tối ưu', 'gạch đầu dòng', 'căn lề', 'format'];
+      const isEditRequest = editKeywords.some(keyword => textToSend.toLowerCase().includes(keyword));
+
+      if (onEditContent && isEditRequest) {
         try {
-          const newContent = await onEditContent(userMsg);
+          const newContent = await onEditContent(textToSend);
           setMessages(prev => [...prev, { 
             role: 'model', 
             content: 'Tôi đã chỉnh sửa nội dung văn bản theo yêu cầu của bạn. Bạn kiểm tra lại nhé!' 
@@ -70,7 +68,6 @@ export const AITemplateAssistant: React.FC<AITemplateAssistantProps> = ({ onClos
           return;
         } catch (editError) {
           console.error("AI Edit Error:", editError);
-          // Fallback to normal chat if edit fails or is not meant to be an edit
         }
       }
 
@@ -79,7 +76,7 @@ export const AITemplateAssistant: React.FC<AITemplateAssistantProps> = ({ onClos
         parts: [{ text: m.content }]
       }));
 
-      const response = await generateTemplatePrompt(userMsg, history);
+      const response = await generateTemplatePrompt(textToSend, history);
       
       if (response.type === 'template') {
         setMessages(prev => [...prev, { 
@@ -109,6 +106,12 @@ export const AITemplateAssistant: React.FC<AITemplateAssistantProps> = ({ onClos
       setIsLoading(false);
     }
   };
+
+  const quickActions = [
+    { label: 'Sửa lỗi chính tả', icon: <CheckCircle2 size={12} />, prompt: 'Sửa lỗi chính tả cho phần nội dung' },
+    { label: 'Thêm gạch đầu dòng', icon: <ListChecks size={12} />, prompt: 'Thêm gạch đầu dòng vào đầu mỗi câu trong phần nội dung' },
+    { label: 'Tối ưu câu văn', icon: <Sparkles size={12} />, prompt: 'Hãy tối ưu hóa câu văn trong phần nội dung để chuyên nghiệp hơn' },
+  ];
 
   const clearChat = () => {
     setMessages([{ role: 'model', content: 'Chào bạn! Tôi có thể giúp bạn tạo mẫu văn bản hoặc bóc tách dữ liệu từ file Word hiện có. Bạn cần giúp gì?' }]);
@@ -364,7 +367,22 @@ export const AITemplateAssistant: React.FC<AITemplateAssistantProps> = ({ onClos
         )}
       </div>
 
-      <div className="p-6 bg-white border-t border-slate-100">
+      <div className="p-4 bg-white border-t border-slate-100 space-y-4">
+        {/* Quick Actions */}
+        <div className="flex flex-wrap gap-2">
+          {quickActions.map((action, i) => (
+            <button
+              key={i}
+              onClick={() => handleSend(action.prompt)}
+              disabled={isLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-full text-[10px] font-bold border border-slate-100 hover:border-indigo-100 transition-all active:scale-95 disabled:opacity-50"
+            >
+              {action.icon}
+              {action.label}
+            </button>
+          ))}
+        </div>
+
         <div className="flex gap-3 bg-slate-100 p-2 rounded-[1.5rem] shadow-inner focus-within:ring-2 focus-within:ring-indigo-500/20 transition-all border border-slate-200">
           <input 
             type="text"
@@ -375,7 +393,7 @@ export const AITemplateAssistant: React.FC<AITemplateAssistantProps> = ({ onClos
             className="flex-1 px-4 py-2 bg-transparent rounded-xl focus:outline-none text-sm font-medium"
           />
           <button 
-            onClick={handleSend}
+            onClick={() => handleSend()}
             disabled={isLoading || !inputValue.trim()}
             className="p-3 bg-indigo-600 text-white rounded-2xl hover:bg-indigo-700 disabled:opacity-50 transition-all shadow-lg shadow-indigo-600/30 active:scale-95 shrink-0"
           >

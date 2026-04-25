@@ -111,7 +111,7 @@ export async function generateTemplatePrompt(description: string, chatHistory: a
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-2.0-flash",
       contents,
       config: {
         systemInstruction,
@@ -167,7 +167,7 @@ export async function analyzeDocxForTemplate(extractedText: string, customName?:
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-2.0-flash",
       contents: `Hãy phân tích văn bản sau và tạo mẫu template. ${customName ? `Tên mẫu là: ${customName}` : ''}\n\nNỘI DUNG VĂN BẢN:\n${extractedText}`,
       config: {
         systemInstruction,
@@ -230,7 +230,7 @@ export async function extractDocxStructure(extractedText: string): Promise<any> 
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-2.0-flash",
       contents: `Hãy bóc tách văn bản hành chính sau đây:\n\n${extractedText}`,
       config: {
         systemInstruction,
@@ -253,7 +253,7 @@ export async function checkSpellWithAI(content: string): Promise<string> {
   
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: `Hãy kiểm tra và sửa lỗi chính tả cho đoạn văn bản hành chính sau đây. Chỉ trả về đoạn văn bản đã được sửa, không thêm giải thích: \n\n${content}`,
     });
     return response.text.trim();
@@ -271,7 +271,7 @@ export async function cleanContentWithAI(content: string): Promise<string> {
   
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: `Hãy tối ưu hóa câu văn trong đoạn văn bản hành chính sau để trở nên chuyên nghiệp, súc tích và trang trọng hơn. Giữ nguyên ý nghĩa gốc. Chỉ trả về văn bản kết quả: \n\n${content}`,
     });
     return response.text.trim();
@@ -289,17 +289,29 @@ export async function editContentWithAI(currentContent: string, instruction: str
   
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents: `Bạn là trợ lý soạn thảo văn bản hành chính Việt Nam. 
-      Nhiệm vụ của bạn là chỉnh sửa nội dung văn bản theo yêu cầu của người dùng.
-      
+      model: "gemini-2.0-flash",
+      contents: `Bạn là trợ lý soạn thảo văn bản hành chính Việt Nam thông minh.
+      Nhiệm vụ của bạn là thực hiện các yêu cầu chỉnh sửa văn bản của người dùng một cách chính xác.
+
+      CÁC DẠNG YÊU CẦU THƯỜNG GẶP:
+      - Thêm gạch đầu dòng (-) vào đầu mỗi câu hoặc dòng.
+      - Chuyển đổi ngôn ngữ sang trang trọng hơn.
+      - Tóm tắt hoặc mở rộng nội dung.
+      - Sửa lỗi câu từ, dấu câu.
+      - Thay đổi cách xưng hô hoặc định dạng.
+
+      QUY TẮC PHẢN HỒI:
+      - CHỈ TRẢ VỀ NỘI DUNG VĂN BẢN ĐÃ CHỈNH SỬA.
+      - KHÔNG có lời chào, không giải thích, không thêm ký tự lạ.
+      - Giữ nguyên cấu trúc văn bản hành chính (Khoản, Điều nếu có).
+
       NỘI DUNG HIỆN TẠI:
       ${currentContent}
       
       YÊU CẦU CHỈNH SỬA:
       ${instruction}
       
-      HÃY TRẢ VỀ TOÀN BỘ NỘI DUNG ĐÃ ĐƯỢC CHỈNH SỬA. CHỈ TRẢ VỀ VĂN BẢN KẾT QUẢ, KHÔNG THÊM GIẢI THÍCH HAY LỜI CHÀO.`,
+      VĂN BẢN KẾT QUẢ:`,
     });
     return response.text.trim();
   } catch (error) {
