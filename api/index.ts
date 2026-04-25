@@ -272,14 +272,21 @@ app.post('/api/generate-docx', async (req, res) => {
     });
 
     const buffer = await Packer.toBuffer(doc);
+    
+    // Đặt các Header để trình duyệt hiểu đây là file download
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', 'attachment; filename=vanban_hanhchinh.docx');
-    res.setHeader('Content-Length', buffer.length.toString());
-    res.send(buffer);
+    
+    // Gửi buffer trực tiếp
+    res.status(200).send(buffer);
 
   } catch (error) {
     console.error('Docx generation error:', error);
-    res.status(500).json({ error: 'Failed to generate document: ' + (error as Error).message });
+    res.status(500).json({ 
+      error: 'Failed to generate document', 
+      details: (error as Error).message,
+      stack: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined 
+    });
   }
 });
 

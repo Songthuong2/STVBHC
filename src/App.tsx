@@ -777,10 +777,21 @@ export default function App() {
         body: JSON.stringify(formData),
       });
 
-      if (!response.ok) throw new Error('Generation failed');
+      if (!response.ok) {
+        let errorMsg = 'Lỗi máy chủ khi tạo file';
+        try {
+          const errData = await response.json();
+          errorMsg = errData.details || errData.error || errorMsg;
+        } catch (e) {
+          // Response is not JSON
+        }
+        throw new Error(errorMsg);
+      }
 
       const blob = await response.blob();
-      saveAs(blob, 'vanban_hanhchinh.docx');
+      if (blob.size === 0) throw new Error('File tạo ra bị trống');
+      
+      saveAs(blob, `vanban_hanhchinh_${new Date().getTime()}.docx`);
       
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
