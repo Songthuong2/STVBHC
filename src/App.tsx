@@ -25,7 +25,8 @@ import {
   User as UserIcon, 
   AlignCenter,
   AlignLeft,
-  Trash2 
+  Trash2,
+  Bot 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { saveAs } from 'file-saver';
@@ -56,6 +57,8 @@ import {
   Timestamp,
   User
 } from './lib/firebase';
+import { AITemplateAssistant } from './components/AITemplateAssistant';
+import { editContentWithAI } from './services/geminiService';
 
 // Initialize Gemini AI (Lazy initialization)
 let genAIInstance: GoogleGenAI | null = null;
@@ -268,6 +271,7 @@ const isHeading = (line: string, boldLevel: number) => {
 
 export default function App() {
   const [formData, setFormData] = useState<DocFormData>(INITIAL_DATA);
+  const [showAIAssistant, setShowAIAssistant] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
   const [isCheckingSpell, setIsCheckingSpell] = useState(false);
@@ -276,8 +280,8 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showConvertMenu, setShowConvertMenu] = useState(false);
-  const [history, setHistory] = useState<string[]>([]);
-  const [future, setFuture] = useState<string[]>([]);
+  const [history, setHistory] = useState<DocFormData[]>([]);
+  const [future, setFuture] = useState<DocFormData[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -289,8 +293,11 @@ export default function App() {
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [isManagingTemplates, setIsManagingTemplates] = useState(false);
+  const [isPreviewEditor, setIsPreviewEditor] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<DocTemplate | null>(null);
   const [isLoadingDocs, setIsLoadingDocs] = useState(false);
+  const lastHistorySaveRef = useRef<number>(0);
+  const historyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -605,7 +612,7 @@ export default function App() {
 
 
   const loadTemplate = (template: typeof TEMPLATES[0]) => {
-    pushToHistory(formData.content);
+    pushToHistory(formData);
     setFormData(prev => ({
       ...prev,
       ...template.data
@@ -613,8 +620,8 @@ export default function App() {
     setActiveTemplate(template.id);
   };
 
-  const pushToHistory = (currentContent: string) => {
-    setHistory(prev => [...prev, currentContent].slice(-50)); // Limit history to 50 steps
+  const pushToHistory = (currentData: DocFormData) => {
+    setHistory(prev => [...prev, { ...currentData }].slice(-50)); // Limit history to 50 steps
     setFuture([]);
   };
 
@@ -622,31 +629,43 @@ export default function App() {
     if (history.length === 0) return;
     const previous = history[history.length - 1];
     setHistory(prev => prev.slice(0, -1));
-    setFuture(prev => [formData.content, ...prev]);
-    setFormData(prev => ({ ...prev, content: previous }));
+    setFuture(prev => [formData, ...prev]);
+    setFormData(previous);
   };
 
   const redo = () => {
     if (future.length === 0) return;
     const [next, ...remainingFuture] = future;
     setFuture(remainingFuture);
-    setHistory(prev => [...prev, formData.content]);
-    setFormData(prev => ({ ...prev, content: next }));
+    setHistory(prev => [...prev, formData]);
+    setFormData(next);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
+    
     if (name === 'content') {
-      // For character typing, we could debounce history pushing, but for now we push on every significant change or just keep it simple
-      // A common pattern is to only push to history on blur or after a pause
+      const now = Date.now();
+      // Save history before change if it's been a while (e.g. 3 seconds) since last save
+      if (now - lastHistorySaveRef.current > 3000) {
+        pushToHistory(formData);
+        lastHistorySaveRef.current = now;
+      }
+
+      // Refresh the "idle" timer to ensure we save the state after typing stops
+      if (historyTimeoutRef.current) clearTimeout(historyTimeoutRef.current);
+      historyTimeoutRef.current = setTimeout(() => {
+        lastHistorySaveRef.current = 0; // Next change will push to history
+      }, 1500);
     }
+
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const convertEncoding = async (from: 'tcvn3' | 'vni') => {
     if (!formData.content.trim()) return;
     
-    pushToHistory(formData.content);
+    pushToHistory(formData);
     setIsCleaning(true);
     try {
       const prompt = `Chuyển mã nội dung sau từ bảng mã ${from === 'tcvn3' ? 'TCVN3 (ABC)' : 'VNI-Windows'} sang Unicode.
@@ -674,7 +693,7 @@ export default function App() {
   const checkSpellWithAI = async () => {
     if (!formData.content.trim()) return;
     
-    pushToHistory(formData.content);
+    pushToHistory(formData);
     setIsCheckingSpell(true);
     try {
       const prompt = `Kiểm tra và sửa lỗi chính tả cho văn bản hành chính sau đây.
@@ -699,7 +718,7 @@ export default function App() {
   };
 
   const convertCase = (type: 'upper' | 'lower' | 'sentence' | 'no-accent') => {
-    pushToHistory(formData.content);
+    pushToHistory(formData);
     let text = formData.content;
     if (type === 'upper') {
       text = text.toUpperCase();
@@ -721,7 +740,7 @@ export default function App() {
   const cleanContentWithAI = async () => {
     if (!formData.content.trim()) return;
     
-    pushToHistory(formData.content);
+    pushToHistory(formData);
     setIsCleaning(true);
     try {
       const prompt = `Bạn là một chuyên gia về soạn thảo văn bản hành chính Việt Nam. Hãy làm sạch và chuẩn hóa nội dung văn bản sau đây.
@@ -814,51 +833,61 @@ export default function App() {
 
   const PreviewContent = ({ isModal = false }) => (
     <div 
-      className={`${isModal ? 'w-full' : 'w-[600px] shadow-2xl'} h-fit min-h-[842px] bg-white flex flex-col shadow-slate-400/50 relative mx-auto transition-all duration-300`} 
+      className={`${isModal ? 'w-full' : 'paper-canvas w-[600px] shadow-[0_20px_50px_rgba(0,0,0,0.15)]'} h-fit min-h-[842px] bg-white relative mx-auto transition-all duration-300 group`} 
       style={{ 
         fontFamily: formData.fontFamily,
         paddingTop: `${formData.margins.top * 28.35}pt`,
         paddingBottom: `${formData.margins.bottom * 28.35}pt`,
         paddingLeft: `${formData.margins.left * 28.35}pt`,
         paddingRight: `${formData.margins.right * 28.35}pt`,
+        color: '#000000'
       }}
     >
+      {/* Decorative corners for premium look */}
+      {!isModal && (
+        <>
+          <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-slate-100/30 rounded-tl-sm pointer-events-none" />
+          <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-slate-100/30 rounded-tr-sm pointer-events-none" />
+          <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-slate-100/30 rounded-bl-sm pointer-events-none" />
+          <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-slate-100/30 rounded-br-sm pointer-events-none" />
+        </>
+      )}
+
       {/* National Title Header */}
-      <div className="flex justify-between items-start mb-8">
+      <div className="flex justify-between items-start mb-8 relative z-10 text-black">
         <div className="text-center w-[33%] flex flex-col items-center">
-          <p className="text-[13px] uppercase font-bold leading-tight line-clamp-2">{formData.agencyName}</p>
-          <p className="text-[13px] mt-1">Số: {formData.docNumber}</p>
+          <p className="text-[12pt] uppercase font-bold leading-tight line-clamp-2">{formData.agencyName}</p>
+          <p className="text-[12pt] mt-1">Số: {formData.docNumber}</p>
           <div className="w-16 h-[0.5px] bg-black mt-2"></div>
         </div>
         {formData.docType !== 'regulation' && (
           <div className="text-center w-[67%] flex flex-col items-center">
-            <p className="text-[13px] font-bold uppercase tracking-tight whitespace-nowrap">{formData.nationalTitle}</p>
-            <p className="text-[14px] font-bold mt-1">{formData.motto}</p>
+            <p className="text-[12pt] font-bold uppercase tracking-tight whitespace-nowrap">{formData.nationalTitle}</p>
+            <p className="text-[13pt] font-bold mt-1">{formData.motto}</p>
             <div className="w-40 h-[0.5px] bg-black mt-1"></div>
           </div>
         )}
       </div>
 
       {formData.docType !== 'regulation' && (
-        <div className="text-right mb-6">
-          <p className="text-[13px] italic">{formData.locationDate}</p>
+        <div className="text-right mb-6 relative z-10 text-black">
+          <p className="text-[13pt] italic">{formData.locationDate}</p>
         </div>
       )}
 
       {/* Document Title */}
-      <div className="text-center mb-8">
+      <div className="text-center mb-8 relative z-10 text-black">
         {formData.docType === 'regulation' ? (
           <div className="flex flex-col items-center gap-1">
-            <h3 className="text-[17px] font-bold uppercase leading-tight whitespace-pre-wrap">{formData.title}</h3>
+            <h3 className="text-[16pt] font-bold uppercase leading-tight whitespace-pre-wrap">{formData.title}</h3>
             <div className="w-24 h-[1px] bg-black mt-2"></div>
           </div>
         ) : (
-          <h3 className="text-[15px] font-bold uppercase leading-tight whitespace-pre-wrap">{formData.title}</h3>
+          <h3 className="text-[14pt] font-bold uppercase leading-tight whitespace-pre-wrap">{formData.title}</h3>
         )}
       </div>
 
-      {/* Main Body */}
-      <div className="text-[14px] leading-relaxed text-justify mb-16 whitespace-pre-wrap">
+      <div className="text-[14pt] leading-relaxed text-justify mb-16 whitespace-pre-wrap relative z-10 text-black">
         {formData.content.split('\n').map((line, i) => {
           const isLineHeading = isHeading(line, formData.boldLevel);
           const headLevel = getHeadingLevel(line);
@@ -871,7 +900,8 @@ export default function App() {
               style={{ 
                 textIndent: (line.trim() && !isLineHeading) ? '1.27cm' : '0',
                 marginBottom: line.trim() ? '6pt' : '0',
-                textAlign: shouldCenter ? 'center' : 'justify'
+                textAlign: shouldCenter ? 'center' : 'justify',
+                color: '#000000'
               }}
             >
               {line}
@@ -881,168 +911,133 @@ export default function App() {
       </div>
 
       {/* Footer / Signatures */}
-      <div className="flex justify-between mt-auto">
+      <div className="flex justify-between mt-auto relative z-10 text-black">
         <div className="w-[45%]">
-          <p className="text-[12px] font-bold italic underline mb-1">Nơi nhận:</p>
-          <p className="text-[11px] leading-tight whitespace-pre-wrap">
+          <p className="text-[11pt] font-bold italic underline mb-1">Nơi nhận:</p>
+          <p className="text-[11pt] leading-tight whitespace-pre-wrap">
             {formData.recipient.split('\n').map(line => `- ${line}`).join('\n')}
           </p>
         </div>
         <div className="w-[50%] text-center">
           {formData.docType === 'regulation' && (
-            <p className="text-[13px] italic mb-2">{formData.locationDate}</p>
+            <p className="text-[12pt] italic mb-2">{formData.locationDate}</p>
           )}
-          <p className="text-[14px] font-bold uppercase">{formData.signerPosition}</p>
-          <div className="h-28 flex items-center justify-center italic text-slate-300 text-[12px]">
-            (Chỗ ký tên, đóng dấu)
+          <p className="text-[13pt] font-bold uppercase">{formData.signerPosition}</p>
+          <div className="h-28 flex items-center justify-center italic text-slate-400 text-[11pt] border border-dashed border-slate-100 my-2 rounded-xl">
+            (Ký tên, đóng dấu)
           </div>
-          <p className="text-[14px] font-bold uppercase">{formData.signerName}</p>
+          <p className="text-[13pt] font-bold uppercase">{formData.signerName}</p>
         </div>
       </div>
 
       {!isModal && (
-        <div className="absolute top-4 right-4 text-[10px] text-slate-300 pointer-events-none uppercase tracking-widest font-sans">
-          Bản xem trước A4
+        <div className="absolute bottom-4 right-4 text-[8px] text-slate-300 pointer-events-none uppercase tracking-[0.2em] font-sans opacity-0 group-hover:opacity-100 transition-opacity">
+          Professional Document System v3.0
         </div>
       )}
     </div>
   );
 
   return (
-    <div className={`w-full h-screen bg-[#f8fafc] text-slate-800 flex flex-col overflow-hidden transition-all duration-300 ${isFullscreen ? 'fixed inset-0 z-[1000]' : 'relative'}`}>
+    <div className={`w-full h-screen bg-[#F0F2F5] text-slate-800 flex flex-col overflow-hidden transition-all duration-300 ${isFullscreen ? 'fixed inset-0 z-[1000]' : 'relative'}`}>
       {/* Header */}
-      <header className={`bg-white border-b border-slate-200 flex justify-between items-center shrink-0 z-20 shadow-sm transition-all ${isFullscreen ? 'px-4 py-2' : 'px-4 md:px-8 py-4'}`}>
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-blue-600 rounded flex items-center justify-center text-white font-bold shadow-md">
-            <FileText size={20} />
+      <header className={`bg-white/80 backdrop-blur-xl border-b border-slate-200/60 flex justify-between items-center shrink-0 z-30 shadow-[0_1px_3px_0_rgba(0,0,0,0.05)] transition-all ${isFullscreen ? 'px-4 py-2' : 'px-4 md:px-8 py-3'}`}>
+        <div className="flex items-center gap-4">
+          <div className="p-2.5 bg-gradient-to-br from-indigo-600 to-violet-700 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+            <FileText size={22} strokeWidth={2.5} />
           </div>
           <div className="hidden sm:block">
-            <h1 className="text-lg font-bold text-slate-900 leading-tight uppercase tracking-tight">Hệ thống Soạn thảo</h1>
-            <p className="text-xs text-slate-500">Nghị định 78/2025/NĐ-CP</p>
+            <h1 className="text-base font-extrabold text-slate-900 leading-tight tracking-tight font-display italic">STVBHC <span className="text-indigo-600">Pro</span></h1>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mt-0.5">Hệ thống Soạn thảo Thông minh</p>
           </div>
         </div>
         
-        <div className="flex gap-2">
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileUpload} 
-            accept=".docx" 
-            className="hidden" 
-          />
-          
-          {user ? (
-            <div className="flex items-center gap-2 mr-2">
-              <div className="hidden md:flex flex-col items-end mr-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter leading-none">Tài khoản</span>
-                <span className="text-xs font-semibold text-slate-700">{user.displayName}</span>
-              </div>
-              <div className="relative group">
-                <img 
-                  src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
-                  alt="Avatar" 
-                  className="w-9 h-9 rounded-full border-2 border-white shadow-sm ring-1 ring-slate-200 cursor-pointer"
-                />
-                <div className="absolute top-full right-0 mt-2 w-48 bg-white border border-slate-200 rounded-xl shadow-xl py-1 invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-all z-50">
-                  <div className="px-4 py-2 border-b border-slate-100 mb-1">
-                    <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest mb-0.5">Hội viên</p>
-                    <p className="text-xs font-bold text-slate-800 truncate">{user.email}</p>
+        <div className="flex items-center gap-2">
+          {/* Group 1: Templates & AI */}
+          <div className="flex items-center bg-slate-100/50 p-1 rounded-xl gap-1 mr-2 border border-slate-200/50">
+            <button 
+              onClick={() => setShowTemplateModal(true)}
+              className="px-3 py-1.5 hover:bg-white text-slate-700 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-2 border border-transparent hover:border-slate-200"
+            >
+              <Layout size={14} className="text-indigo-600" /> 
+              <span className="hidden sm:inline">Thư viện mẫu</span>
+            </button>
+            <button 
+              onClick={() => setShowAIAssistant(true)}
+              className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold transition-all shadow-md shadow-indigo-100 flex items-center gap-2 hover:bg-indigo-700 active:scale-95"
+            >
+              <Bot size={14} /> 
+              <span className="hidden sm:inline">AI Trợ lý</span>
+            </button>
+            <button 
+              onClick={() => setShowPreviewModal(true)}
+              className="px-3 py-1.5 hover:bg-white text-slate-700 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-2 border border-transparent hover:border-slate-200"
+            >
+              <Eye size={14} className="text-amber-500" /> 
+              <span className="hidden sm:inline">Xem trước</span>
+            </button>
+          </div>
+
+          <div className="h-6 w-[1px] bg-slate-200 mx-1"></div>
+
+          {/* Group 2: User Actions */}
+          <div className="flex items-center gap-3">
+            {user ? (
+              <div className="flex items-center gap-3">
+                <div className="hidden md:flex flex-col items-end">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Xin chào,</span>
+                  <span className="text-xs font-bold text-slate-700">{user.displayName}</span>
+                </div>
+                <div className="relative group">
+                  <img 
+                    src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
+                    alt="Avatar" 
+                    className="w-10 h-10 rounded-full border-2 border-white shadow-md ring-1 ring-slate-100 cursor-pointer transition-transform group-hover:scale-105"
+                  />
+                  <div className="absolute top-full right-0 mt-3 w-56 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-all z-50">
+                    <div className="px-4 py-3 border-b border-slate-50 mb-2">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <p className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-widest">Đang kết nối</p>
+                      </div>
+                      <p className="text-xs font-bold text-slate-800 truncate">{user.email}</p>
+                    </div>
+                    <button 
+                      onClick={() => setShowHistoryModal(true)}
+                      className="w-full text-left px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-3 transition-colors"
+                    >
+                      <History size={16} /> Văn bản đã lưu
+                    </button>
+                    <button 
+                      onClick={handleLogout}
+                      className="w-full text-left px-4 py-2 text-xs font-bold text-red-500 hover:bg-red-50 flex items-center gap-3 transition-colors mt-1"
+                    >
+                      <LogOut size={16} /> Đăng xuất
+                    </button>
                   </div>
-                  <button 
-                    onClick={() => setShowHistoryModal(true)}
-                    className="w-full text-left px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 flex items-center gap-2"
-                  >
-                    <History size={14} /> Văn bản đã lưu
-                  </button>
-                  <button 
-                    onClick={() => setShowTemplateModal(true)}
-                    className="w-full text-left px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 flex items-center gap-2"
-                  >
-                    <Layout size={14} /> Quản lý mẫu
-                  </button>
-                  <button 
-                    onClick={handleLogout}
-                    className="w-full text-left px-4 py-2 text-xs font-medium text-red-600 hover:bg-red-50 flex items-center gap-2"
-                  >
-                    <LogOut size={14} /> Đăng xuất
-                  </button>
                 </div>
               </div>
-            </div>
-          ) : (
+            ) : (
+              <button 
+                onClick={handleLogin}
+                className="btn-primary"
+              >
+                <LogIn size={16} />
+                <span>Đăng nhập</span>
+              </button>
+            )}
+
+            <div className="h-8 w-[1px] bg-slate-200/60 mx-1"></div>
+
             <button 
-              onClick={handleLogin}
-              className="p-2 md:px-4 md:py-2 bg-blue-50 text-blue-600 border border-blue-100 rounded text-sm font-bold hover:bg-blue-100 transition-colors flex items-center gap-2 mr-2"
+              onClick={() => generateWord()}
+              disabled={isGenerating}
+              className="btn-primary bg-indigo-600"
             >
-              <LogIn size={16} />
-              <span>Đăng nhập</span>
+              {isGenerating ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+              <span className="hidden sm:inline">Xuất File</span>
             </button>
-          )}
-
-          <div className="h-10 w-[1px] bg-slate-200 mx-1 hidden sm:block"></div>
-
-          <button 
-            onClick={() => setIsFullscreen(!isFullscreen)}
-            className={`p-2 md:px-4 md:py-2 rounded text-sm font-medium transition-all flex items-center gap-2 shadow-sm border ${
-              isFullscreen 
-              ? 'bg-amber-100 border-amber-300 text-amber-800 hover:bg-amber-200' 
-              : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'
-            }`}
-            title={isFullscreen ? "Đóng trình soạn thảo" : "Chỉnh sửa toàn màn hình"}
-          >
-            {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
-            <span className="hidden sm:inline">{isFullscreen ? "Đóng trình chỉnh sửa" : "Chỉnh sửa toàn màn hình"}</span>
-          </button>
-          <button 
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading || isGenerating}
-            className="p-2 md:px-4 md:py-2 bg-white border border-slate-300 rounded text-sm font-medium hover:bg-slate-50 transition-colors flex items-center gap-2 text-slate-600 shadow-sm"
-            title="Tải file Word lên"
-          >
-            {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-            <span className="hidden sm:inline">Tải File Lên</span>
-          </button>
-          <button 
-            onClick={() => setShowSettingsModal(true)}
-            className="p-2 md:px-4 md:py-2 bg-white border border-slate-300 rounded text-sm font-medium hover:bg-slate-50 transition-colors flex items-center gap-2 text-slate-600"
-            title="Cài đặt định dạng"
-          >
-            <Settings size={16} />
-            <span className="hidden sm:inline">Cài đặt</span>
-          </button>
-          <button 
-            onClick={() => setFormData(INITIAL_DATA)}
-            className="p-2 md:px-4 md:py-2 bg-white border border-slate-300 rounded text-sm font-medium hover:bg-slate-50 transition-colors flex items-center gap-2 text-slate-600"
-            title="Làm lại"
-          >
-            <RotateCcw size={16} />
-            <span className="hidden sm:inline">Làm lại</span>
-          </button>
-          <button 
-            onClick={() => setShowPreviewModal(true)}
-            className="px-3 py-2 md:px-4 bg-slate-100 border border-slate-200 rounded text-sm font-medium hover:bg-slate-200 transition-colors flex items-center gap-2 text-slate-700"
-            title="Xem trước toàn màn hình"
-          >
-            <Eye size={16} />
-            <span>Xem trước</span>
-          </button>
-          <button 
-            onClick={saveDocument}
-            disabled={isSaving}
-            className="px-3 py-2 md:px-4 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-sm font-semibold hover:bg-emerald-100 transition-all flex items-center gap-2 disabled:opacity-50"
-            title="Lưu văn bản vào đám mây"
-          >
-            {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-            <span className="hidden sm:inline">Lưu Cloud</span>
-          </button>
-          <button 
-            onClick={generateWord}
-            disabled={isGenerating}
-            className="px-3 py-2 md:px-5 bg-blue-600 text-white rounded text-sm font-semibold shadow-sm hover:bg-blue-700 transition-all flex items-center gap-2 disabled:opacity-50"
-          >
-            {isGenerating ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-            <span className="hidden xs:inline">Tải .docx</span>
-          </button>
+          </div>
         </div>
       </header>
 
@@ -1118,28 +1113,30 @@ export default function App() {
         </AnimatePresence>
 
         {/* Sidebar - Editor */}
-        <aside className="w-full lg:w-[420px] bg-white border-r border-slate-200 overflow-y-auto shrink-0 scroll-smooth shadow-inner z-10">
-          {/* Template Library Section */}
-          <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <Layout size={14} className="text-slate-400" />
-              Thư viện mẫu văn bản
+        <aside className="w-full lg:w-[420px] bg-white border-r border-slate-200 overflow-y-auto shrink-0 z-10 custom-scrollbar shadow-inner">
+          <div className="p-5 border-b border-slate-100 bg-slate-50/30">
+            <h2 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+              <Layout size={14} className="text-indigo-500" />
+              Thư viện mẫu nhanh
             </h2>
-            <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide -mx-2 px-2">
+            <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar-h">
               {TEMPLATES.map((tpl) => (
                 <button
                   key={tpl.id}
                   onClick={() => loadTemplate(tpl)}
-                  className={`flex-shrink-0 w-48 p-4 rounded-xl border text-left transition-all hover:shadow-md group ${
+                  className={`flex-shrink-0 w-44 p-4 rounded-2xl border text-left transition-all active:scale-95 group ${
                     activeTemplate === tpl.id 
-                    ? 'border-blue-500 bg-blue-50/50 shadow-sm' 
-                    : 'border-slate-200 bg-white hover:border-blue-300'
+                    ? 'border-indigo-500 bg-indigo-50 shadow-md ring-1 ring-indigo-200' 
+                    : 'border-slate-100 bg-white hover:border-indigo-300 hover:shadow-sm'
                   }`}
                 >
-                  <h3 className={`font-bold text-sm mb-1 ${activeTemplate === tpl.id ? 'text-blue-700' : 'text-slate-800'}`}>
+                  <div className={`p-2 rounded-lg mb-3 w-fit ${activeTemplate === tpl.id ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600'}`}>
+                    <FileText size={16} />
+                  </div>
+                  <h3 className={`font-bold text-xs mb-1 ${activeTemplate === tpl.id ? 'text-indigo-900' : 'text-slate-800'}`}>
                     {tpl.title}
                   </h3>
-                  <p className="text-[10px] text-slate-500 leading-relaxed line-clamp-2">
+                  <p className="text-[9px] text-slate-400 font-medium leading-normal line-clamp-1">
                     {tpl.description}
                   </p>
                 </button>
@@ -1179,289 +1176,297 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-600">Tên cơ quan ban hành</label>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider ml-1">Cơ quan ban hành</label>
                   <input 
                     name="agencyName"
                     value={formData.agencyName}
                     onChange={handleInputChange}
                     type="text" 
-                    className="w-full px-3 py-2 border border-slate-200 rounded text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+                    className="input-standard" 
                   />
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-600">Số văn bản</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider ml-1">Số hiệu</label>
                     <input 
                       name="docNumber"
                       value={formData.docNumber}
                       onChange={handleInputChange}
                       type="text" 
-                      className="w-full px-3 py-2 border border-slate-200 rounded text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+                      className="input-standard font-mono" 
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-slate-600">Địa danh & Thời gian</label>
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider ml-1">Địa danh & Ngày tháng</label>
                     <input 
                       name="locationDate"
                       value={formData.locationDate}
                       onChange={handleInputChange}
                       type="text" 
-                      className="w-full px-3 py-2 border border-slate-200 rounded text-sm bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+                      className="input-standard italic" 
                     />
                   </div>
                 </div>
               </div>
             </section>
 
-            <section className="pt-6 border-t border-slate-100">
-              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                <FileText size={14} />
-                Nội dung chính
+            <section className="pt-8 border-t border-slate-100">
+              <h2 className="text-[10px] font-extrabold text-slate-800 uppercase tracking-widest mb-5 flex items-center gap-2">
+                <div className="w-1.5 h-4 bg-indigo-600 rounded-full"></div>
+                Nội dung chi tiết
               </h2>
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-600">Tiêu đề văn bản</label>
-                  <input 
+              <div className="space-y-5">
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider ml-1">Tiêu đề văn bản</label>
+                  <textarea 
                     name="title"
                     value={formData.title}
                     onChange={handleInputChange}
-                    type="text" 
-                    className="w-full px-3 py-2 border border-slate-200 rounded text-sm font-bold uppercase focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+                    rows={2}
+                    className="input-standard font-bold uppercase resize-none leading-relaxed" 
                   />
                 </div>
-                <div className="space-y-1">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nội dung chi tiết</label>
-                    {selectedTemplate && (
-                      <button 
-                        onClick={() => setSelectedTemplate(null)}
-                        className="text-[10px] font-bold text-red-500 hover:bg-red-50 px-2 py-1 rounded transition-all uppercase tracking-tighter"
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between bg-slate-900 rounded-xl p-1 shadow-lg shadow-slate-200">
+                    <div className="flex items-center gap-1">
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowConvertMenu(!showConvertMenu)}
+                        className="p-2 text-white hover:bg-white/10 rounded-lg transition-all group"
+                        title="Định dạng font"
                       >
-                        Hủy sử dụng mẫu: {selectedTemplate.name}
+                        <TypeIcon size={16} />
                       </button>
-                    )}
-                    <div className="flex flex-wrap items-center gap-1.5 bg-slate-50/80 p-1 rounded-lg border border-slate-100 shadow-sm">
-                      {/* Undo/Redo Group */}
-                      <div className="flex items-center bg-white rounded-md border border-slate-200 shadow-sm overflow-hidden">
-                        <button 
-                          onClick={undo}
-                          disabled={history.length === 0}
-                          className="p-1.5 hover:bg-slate-50 text-slate-500 hover:text-blue-600 transition-colors disabled:opacity-20 border-r border-slate-100"
-                          title="Hoàn tác (Undo)"
-                        >
-                          <Undo2 size={14} />
-                        </button>
-                        <button 
-                          onClick={redo}
-                          disabled={future.length === 0}
-                          className="p-1.5 hover:bg-slate-50 text-slate-500 hover:text-blue-600 transition-colors disabled:opacity-20"
-                          title="Làm lại (Redo)"
-                        >
-                          <Redo2 size={14} />
-                        </button>
-                      </div>
-
-                      {/* Formatting Group */}
-                      <div className="flex items-center gap-1.5">
-                        <div className="relative">
-                          <button
-                            onClick={() => setShowConvertMenu(!showConvertMenu)}
-                            className="h-8 flex items-center gap-1.5 text-[11px] font-bold text-slate-600 px-2.5 bg-white hover:bg-slate-50 rounded-md border border-slate-200 transition-all shadow-sm group"
-                          >
-                            <TypeIcon size={14} className="text-slate-400 group-hover:text-blue-500" />
-                            <span>Chuyển mã</span>
-                            <ChevronDown size={12} className={`text-slate-400 transition-transform ${showConvertMenu ? 'rotate-180' : ''}`} />
-                          </button>
-                          
-                          <AnimatePresence>
-                            {showConvertMenu && (
-                              <>
-                                <div className="fixed inset-0 z-30" onClick={() => setShowConvertMenu(false)}></div>
-                                <motion.div 
-                                  initial={{ opacity: 0, y: 5 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  exit={{ opacity: 0, y: 5 }}
-                                  className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-2xl py-1.5 w-44 z-40 overflow-hidden"
-                                >
-                                  <div className="px-3 py-1 mb-1 text-[9px] font-bold text-slate-400 uppercase tracking-widest">Định dạng chữ</div>
-                                  <button onClick={() => convertCase('upper')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-slate-700 font-medium transition-colors">IN HOA TẤT CẢ</button>
-                                  <button onClick={() => convertCase('lower')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-slate-700 transition-colors">in thường tất cả</button>
-                                  <button onClick={() => convertCase('sentence')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-slate-700 transition-colors">Viết hoa đầu dòng</button>
-                                  <button onClick={() => convertCase('no-accent')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-slate-700 transition-colors">bo dau tieng viet</button>
-                                  <div className="h-[1px] bg-slate-100 my-1.5"></div>
-                                  <div className="px-3 py-1 mb-1 text-[9px] font-bold text-slate-400 uppercase tracking-widest">Khắc phục lỗi</div>
-                                  <button onClick={() => convertEncoding('tcvn3')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-blue-600 font-bold transition-colors">Fix lỗi font TCVN3</button>
-                                  <button onClick={() => convertEncoding('vni')} className="w-full text-left px-3 py-2 text-[11px] hover:bg-blue-50 text-blue-600 font-bold transition-colors">Fix lỗi font VNI</button>
-                                </motion.div>
-                              </>
-                            )}
-                          </AnimatePresence>
-                        </div>
-
-                        <button
-                          onClick={() => setFormData(prev => ({ ...prev, boldLevel: (prev.boldLevel + 1) % 4 }))}
-                          className={`h-8 flex items-center gap-2 text-[11px] font-bold px-3 rounded-md border transition-all shadow-sm shrink-0 ${
-                            formData.boldLevel > 0 
-                            ? 'bg-blue-50 border-blue-200 text-blue-700' 
-                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                          }`}
-                          title={`Tô đậm tiêu đề (Mức ${formData.boldLevel}/3)`}
-                        >
-                          <TypeIcon size={14} className={formData.boldLevel > 0 ? 'font-bold' : ''} />
-                          <span>Tiêu đề B {formData.boldLevel > 0 ? `(${formData.boldLevel})` : ''}</span>
-                        </button>
-
-                        <button
-                          onClick={() => setFormData(prev => ({ ...prev, alignLevel: (prev.alignLevel + 1) % 4 }))}
-                          className={`h-8 flex items-center gap-2 text-[11px] font-bold px-3 rounded-md border transition-all shadow-sm shrink-0 ${
-                            formData.alignLevel > 0 
-                            ? 'bg-amber-50 border-amber-200 text-amber-700' 
-                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                          }`}
-                          title={`Căn lề giữa tiêu đề (Mức ${formData.alignLevel}/3)`}
-                        >
-                          {formData.alignLevel > 0 ? <AlignCenter size={14} /> : <AlignLeft size={14} />}
-                          <span>Lề giữa {formData.alignLevel > 0 ? `(${formData.alignLevel})` : ''}</span>
-                        </button>
-                      </div>
-
-                      {/* AI Utilities Group */}
-                      <div className="flex items-center gap-1.5 border-l border-slate-200 pl-1.5 ml-0.5">
-                        <button
-                          onClick={checkSpellWithAI}
-                          disabled={isCheckingSpell || !formData.content.trim()}
-                          className="h-8 flex items-center gap-2 text-[11px] font-bold text-emerald-700 px-3 bg-emerald-50 hover:bg-emerald-100 rounded-md border border-emerald-200 transition-all disabled:opacity-40 group shadow-sm shrink-0"
-                        >
-                          {isCheckingSpell ? (
-                            <Loader2 size={14} className="animate-spin text-emerald-500" />
-                          ) : (
-                            <CheckCircle2 size={14} className="text-emerald-500 group-hover:scale-110 transition-transform" />
-                          )}
-                          <span>{isCheckingSpell ? 'Đang check...' : 'Sửa lỗi chính tả'}</span>
-                        </button>
-
-                        <button
-                          onClick={cleanContentWithAI}
-                          disabled={isCleaning || !formData.content.trim()}
-                          className="h-8 flex items-center gap-2 text-[11px] font-bold text-blue-700 px-3 bg-blue-50 hover:bg-blue-100 rounded-md border border-blue-200 transition-all disabled:opacity-40 group shadow-sm shrink-0"
-                        >
-                          {isCleaning ? (
-                            <Loader2 size={14} className="animate-spin text-blue-500" />
-                          ) : (
-                            <Sparkles size={14} className="text-blue-500 group-hover:scale-110 transition-transform" />
-                          )}
-                          <span>{isCleaning ? 'Đang xử lý...' : 'AI Tối ưu văn bản'}</span>
-                        </button>
-                      </div>
+                      <AnimatePresence>
+                        {showConvertMenu && (
+                          <>
+                            <div className="fixed inset-0 z-30" onClick={() => setShowConvertMenu(false)}></div>
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: 10 }}
+                              className="absolute left-0 top-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 w-48 z-40 overflow-hidden"
+                            >
+                              <button onClick={() => { convertCase('upper'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-indigo-50 text-slate-700 font-bold">IN HOA</button>
+                              <button onClick={() => { convertCase('sentence'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-indigo-50 text-slate-700 font-medium">Viết hoa đầu dòng</button>
+                              <div className="h-px bg-slate-100 my-1"></div>
+                              <button onClick={() => { convertEncoding('tcvn3'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-red-50 text-red-600 font-bold">Sửa lỗi TCVN3</button>
+                              <button onClick={() => { convertEncoding('vni'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-red-50 text-red-600 font-bold">Sửa lỗi VNI</button>
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                      <button
+                        onClick={() => setFormData(prev => ({ ...prev, boldLevel: (prev.boldLevel + 1) % 4 }))}
+                        className={`p-2 rounded-lg transition-all ${formData.boldLevel > 0 ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-white/10'}`}
+                        title="Tô đậm tiêu đề"
+                      >
+                        <TypeIcon size={16} strokeWidth={3} />
+                      </button>
+                      <button
+                        onClick={() => setFormData(prev => ({ ...prev, alignLevel: (prev.alignLevel + 1) % 4 }))}
+                        className={`p-2 rounded-lg transition-all ${formData.alignLevel > 0 ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-white/10'}`}
+                      >
+                        <AlignCenter size={16} />
+                      </button>
+                      <button
+                        onClick={() => setShowPreviewModal(true)}
+                        className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white/10 rounded-lg transition-all"
+                        title="Xem trước mẫu chuẩn"
+                      >
+                        <Eye size={16} />
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-1 pr-1">
+                      <button
+                        onClick={checkSpellWithAI}
+                        disabled={isCheckingSpell}
+                        className="p-1 px-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5"
+                      >
+                        {isCheckingSpell ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                        CHÍNH TẢ
+                      </button>
+                      <button
+                        onClick={cleanContentWithAI}
+                        disabled={isCleaning}
+                        className="p-1 px-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 shadow-sm"
+                      >
+                        {isCleaning ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                        AI OPTIMIZE
+                      </button>
                     </div>
                   </div>
-                {selectedTemplate && (
-                  <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-2xl space-y-4 mb-4">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-bold text-emerald-800 uppercase tracking-widest flex items-center gap-2">
-                        <Layout size={14} />
-                        Các trường dữ liệu mẫu
-                      </h3>
-                      <p className="text-[10px] text-emerald-500 italic font-medium">Nhập thông tin theo cấu trúc đã định nghĩa</p>
+
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                       <FileText size={12} className="text-indigo-500" />
+                       Nội dung văn bản
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={undo} 
+                        disabled={history.length === 0}
+                        className={`p-1.5 rounded-lg transition-all ${history.length > 0 ? 'text-slate-600 hover:bg-slate-200' : 'text-slate-300 opacity-50 cursor-not-allowed'}`}
+                        title="Hoàn tác (Ctrl+Z)"
+                      >
+                        <Undo2 size={14} />
+                      </button>
+                      <button 
+                        onClick={redo} 
+                        disabled={future.length === 0}
+                        className={`p-1.5 rounded-lg transition-all ${future.length > 0 ? 'text-slate-600 hover:bg-slate-200' : 'text-slate-300 opacity-50 cursor-not-allowed'}`}
+                        title="Làm lại (Ctrl+Y)"
+                      >
+                        <Redo2 size={14} />
+                      </button>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {selectedTemplate.fields.map(field => (
-                        <div key={field.id} className="space-y-1">
-                          <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">{field.label}</label>
-                          {field.type === 'textarea' ? (
-                            <textarea 
-                              value={customFieldValues[field.id] || ''}
-                              onChange={(e) => setCustomFieldValues(prev => ({ ...prev, [field.id]: e.target.value }))}
-                              placeholder={field.placeholder}
-                              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all min-h-[80px]"
-                            />
-                          ) : (
-                            <input 
-                              type={field.type}
-                              value={customFieldValues[field.id] || ''}
-                              onChange={(e) => setCustomFieldValues(prev => ({ ...prev, [field.id]: e.target.value }))}
-                              placeholder={field.placeholder}
-                              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
-                            />
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    <button 
-                      onClick={() => {
-                        let newContent = '';
-                        selectedTemplate.fields.forEach(f => {
-                          if (customFieldValues[f.id]) {
-                            newContent += `${f.label.toUpperCase()}:\n${customFieldValues[f.id]}\n\n`;
-                          }
-                        });
-                        if (newContent) {
-                          setFormData(prev => ({ ...prev, content: newContent }));
-                          setShowSuccess(true);
-                          setTimeout(() => setShowSuccess(false), 2000);
-                        }
-                      }}
-                      className="w-full py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all shadow-md shadow-emerald-600/10"
+                  </div>
+
+                  <div className="relative group">
+                    {/* Background Highlight Layer */}
+                    <div 
+                      className="absolute inset-0 px-4 py-4 border border-transparent rounded-3xl text-sm leading-relaxed whitespace-pre-wrap text-justify overflow-hidden pointer-events-none select-none bg-white font-sans opacity-40"
+                      aria-hidden="true"
                     >
-                      Cập nhật vào Nội dung chính
-                    </button>
+                      {formData.content.split('\n').map((line, i) => {
+                        const isLineHeading = isHeading(line, formData.boldLevel);
+                        const headLevel = getHeadingLevel(line);
+                        const shouldCenter = (headLevel === 100) || (formData.alignLevel > 0 && headLevel > 0 && headLevel <= formData.alignLevel);
+                        
+                        return (
+                          <div 
+                            key={i} 
+                            className={`min-h-[1.5rem] mb-0.5 transition-all duration-300 ${isLineHeading ? 'bg-indigo-100/50 border-l-4 border-indigo-500 -mx-2 px-2' : ''} ${shouldCenter ? 'text-center' : ''}`}
+                          >
+                            {line || '\u00A0'}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <textarea 
+                      name="content"
+                      value={formData.content}
+                      onFocus={() => pushToHistory(formData)}
+                      onChange={handleInputChange}
+                      onKeyDown={(e) => {
+                        if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
+                        if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
+                      }}
+                      placeholder="Nhập nội dung văn bản tại đây..."
+                      className="relative z-10 w-full h-80 lg:h-96 px-4 py-4 border border-slate-200/50 rounded-3xl text-sm leading-relaxed focus:ring-4 focus:ring-indigo-500/5 focus:border-indigo-500 outline-none transition-all scroll-smooth bg-transparent text-slate-800 font-sans backdrop-blur-[1px]"
+                    />
+                    
+                    {formData.boldLevel > 0 && (
+                      <div className="absolute bottom-4 right-4 pointer-events-none z-20">
+                        <motion.span 
+                          initial={{ scale: 0.8, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          className="px-2 py-1 bg-indigo-600 text-white text-[9px] font-bold rounded-lg shadow-lg"
+                        >
+                          LIVE HIGHLIGHT ACTIVE
+                        </motion.span>
+                      </div>
+                    )}
                   </div>
-                )}
-                
-                <textarea 
-                  name="content"
-                    value={formData.content}
-                    onChange={handleInputChange}
-                    className="w-full h-48 lg:h-64 px-3 py-2 border border-slate-200 rounded text-sm resize-none focus:ring-2 focus:ring-blue-500 outline-none transition-all scroll-smooth"
-                  />
+
+                  {/* Header Hint Section (Below Editor) */}
+                  <div className="mt-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    <h3 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                       <Layout size={12} className="text-indigo-500" />
+                       Tóm tắt tiêu đề & định dạng ({formData.boldLevel > 0 ? "Đang áp dụng tô đậm" : "Chưa tô đậm"})
+                    </h3>
+                    <div className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
+                       {formData.content.split('\n').filter(l => getHeadingLevel(l) > 0).length > 0 ? (
+                         formData.content.split('\n').map((line, i) => {
+                           const level = getHeadingLevel(line);
+                           const isApplied = isHeading(line, formData.boldLevel);
+                           if (level === 0) return null;
+                           
+                           return (
+                             <div key={i} className="flex items-center gap-3 group/item">
+                               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${isApplied ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
+                                 {level === 100 ? 'CAPS' : `L${level}`}
+                               </span>
+                               <span className={`text-xs truncate ${isApplied ? 'font-bold text-slate-800' : 'text-slate-400 italic'}`}>
+                                 {line}
+                               </span>
+                             </div>
+                           );
+                         })
+                       ) : (
+                         <p className="text-[10px] italic text-slate-400">Chưa phát hiện tiêu đề nào trong nội dung (Sử dụng I., 1., a)...</p>
+                       )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </section>
 
-            <section className="pt-6 border-t border-slate-100 pb-8">
-              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+            <div className="flex flex-col gap-3">
+              <div className="bg-slate-900 rounded-[2.5rem] p-6 text-white shadow-2xl relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-600/20 rounded-full blur-3xl -mr-16 -mt-16 group-hover:bg-indigo-600/30 transition-colors"></div>
+              <h2 className="text-[10px] font-extrabold text-indigo-300 uppercase tracking-[0.2em] mb-6 flex items-center gap-2 relative z-10">
                 <CheckCircle2 size={14} />
                 Ký duyệt & Nơi nhận
               </h2>
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-600">Chức vụ người ký</label>
-                  <input 
-                    name="signerPosition"
-                    value={formData.signerPosition}
-                    onChange={handleInputChange}
-                    type="text" 
-                    className="w-full px-3 py-2 border border-slate-200 rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
-                  />
+              <div className="space-y-6 relative z-10">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">Chức vụ</label>
+                    <input 
+                      name="signerPosition"
+                      value={formData.signerPosition}
+                      onChange={handleInputChange}
+                      className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all" 
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">Họ tên</label>
+                    <input 
+                      name="signerName"
+                      value={formData.signerName}
+                      onChange={handleInputChange}
+                      className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none transition-all" 
+                    />
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-600">Họ tên người ký</label>
-                  <input 
-                    name="signerName"
-                    value={formData.signerName}
-                    onChange={handleInputChange}
-                    type="text" 
-                    className="w-full px-3 py-2 border border-slate-200 rounded text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-600">Nơi nhận</label>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">Nơi nhận</label>
                   <textarea 
                     name="recipient"
                     value={formData.recipient}
                     onChange={handleInputChange}
-                    className="w-full h-24 px-3 py-2 border border-slate-200 rounded text-sm resize-none focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                    rows={3}
+                    className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm resize-none focus:ring-2 focus:ring-indigo-500 outline-none transition-all leading-relaxed"
                   />
                 </div>
               </div>
-            </section>
+            </div>
+          </div>
+            
+            <div className="h-20"></div> {/* Bottom spacing */}
           </div>
         </aside>
 
-        {/* Content - Live Preview (Hidden on small screens, shown as modal) */}
-        <section className="hidden lg:flex flex-1 bg-slate-200 justify-center p-8 overflow-y-auto scroll-smooth">
-          <PreviewContent />
+        {/* Content - Live Preview */}
+        <section className="hidden lg:flex flex-1 bg-[#E2E8F0] justify-center p-10 overflow-y-auto scroll-smooth custom-scrollbar relative perspective-1000">
+          <div className="fixed top-24 right-10 z-40 flex flex-col gap-3">
+             <button onClick={() => setIsFullscreen(true)} className="p-3 bg-white hover:bg-indigo-600 hover:text-white text-slate-600 rounded-2xl shadow-xl transition-all active:scale-95 border border-slate-200">
+               <Maximize size={20} />
+             </button>
+             <button onClick={() => fileInputRef.current?.click()} className="p-3 bg-white hover:bg-emerald-600 hover:text-white text-slate-600 rounded-2xl shadow-xl transition-all active:scale-95 border border-slate-200">
+               <Upload size={20} />
+             </button>
+             <button onClick={() => setShowSettingsModal(true)} className="p-3 bg-white hover:bg-amber-500 hover:text-white text-slate-600 rounded-2xl shadow-xl transition-all active:scale-95 border border-slate-200">
+               <Settings size={20} />
+             </button>
+          </div>
+          <div className="transform transition-transform hover:scale-[1.01] duration-500">
+            <PreviewContent />
+          </div>
         </section>
       </main>
 
@@ -1637,6 +1642,12 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => setShowAIAssistant(true)}
+                    className="px-4 py-2 bg-indigo-50 border border-indigo-100 text-indigo-600 rounded-xl text-xs font-bold hover:bg-indigo-100 transition-all flex items-center gap-2"
+                  >
+                    <Bot size={14} /> AI Trợ lý
+                  </button>
                   {!isManagingTemplates && (
                     <button 
                       onClick={() => {
@@ -1955,6 +1966,51 @@ export default function App() {
             <CheckCircle2 size={24} />
             Thao tác thành công!
           </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showAIAssistant && user && (
+          <AITemplateAssistant 
+            userId={user.uid}
+            onClose={() => setShowAIAssistant(false)}
+            onEditContent={async (instruction) => {
+              try {
+                const newContent = await editContentWithAI(formData.content, instruction);
+                if (newContent) {
+                  pushToHistory(formData);
+                  setFormData(prev => ({ ...prev, content: newContent }));
+                  return newContent;
+                }
+                return formData.content;
+              } catch (error) {
+                console.error("AI Edit Error:", error);
+                throw error;
+              }
+            }}
+            onApplyDocData={(data) => {
+              pushToHistory(formData);
+              setFormData(prev => ({
+                ...prev,
+                ...data
+              }));
+              setShowSuccess(true);
+              setTimeout(() => setShowSuccess(false), 3000);
+            }}
+            onSaveTemplate={async (template) => {
+              try {
+                await addDoc(collection(db, 'templates'), {
+                  ...template,
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp()
+                });
+                setShowSuccess(true);
+                setTimeout(() => setShowSuccess(false), 3000);
+              } catch (error) {
+                console.error("Error saving AI template:", error);
+                alert("Lỗi khi lưu mẫu AI");
+              }
+            }}
+          />
         )}
       </AnimatePresence>
     </div>
