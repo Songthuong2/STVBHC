@@ -67,15 +67,35 @@ app.post('/api/generate-docx', async (req, res) => {
       alignLevel = 0
     } = req.body;
 
+    // Safety checks for inputs
+    const safeNationalTitle = String(nationalTitle || "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM");
+    const safeMotto = String(motto || "Độc lập - Tự do - Hạnh phúc");
+    const safeAgencyName = String(agencyName || "");
+    const safeDocNumber = String(docNumber || "");
+    const safeLocationDate = String(locationDate || "");
+    const safeTitle = String(title || "VĂN BẢN");
+    const safeContent = String(content || "");
+    const safeRecipient = String(recipient || "");
+    const safeSignerPosition = String(signerPosition || "");
+    const safeSignerName = String(signerName || "");
+    const safeFont = String(fontFamily || "Times New Roman");
+    
+    const safeMargins = {
+      top: Number(margins?.top || 2),
+      bottom: Number(margins?.bottom || 2),
+      left: Number(margins?.left || 3),
+      right: Number(margins?.right || 2),
+    };
+
     const doc = new Document({
       sections: [{
         properties: {
           page: {
             margin: {
-              top: cmToTwips(margins.top),
-              bottom: cmToTwips(margins.bottom),
-              left: cmToTwips(margins.left),
-              right: cmToTwips(margins.right),
+              top: cmToTwips(safeMargins.top),
+              bottom: cmToTwips(safeMargins.bottom),
+              left: cmToTwips(safeMargins.left),
+              right: cmToTwips(safeMargins.right),
             },
           },
         },
@@ -100,19 +120,19 @@ app.post('/api/generate-docx', async (req, res) => {
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         children: [
-                          new TextRun({ text: agencyName.toUpperCase(), bold: true, font: fontFamily, size: 26 }),
+                          new TextRun({ text: safeAgencyName.toUpperCase(), bold: true, font: safeFont, size: 26 }),
                         ],
                       }),
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         children: [
-                          new TextRun({ text: `Số: ${docNumber}`, font: fontFamily, size: 26 }),
+                          new TextRun({ text: `Số: ${safeDocNumber}`, font: safeFont, size: 26 }),
                         ],
                       }),
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         children: [
-                          new TextRun({ text: "────────", bold: true, font: fontFamily, size: 24 }),
+                          new TextRun({ text: "────────", bold: true, font: safeFont, size: 24 }),
                         ],
                       }),
                     ],
@@ -123,20 +143,20 @@ app.post('/api/generate-docx', async (req, res) => {
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         children: [
-                          new TextRun({ text: nationalTitle.toUpperCase(), bold: true, font: fontFamily, size: 26 }),
+                          new TextRun({ text: safeNationalTitle.toUpperCase(), bold: true, font: safeFont, size: 26 }),
                         ],
                       }),
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         children: [
-                          new TextRun({ text: motto, bold: true, font: fontFamily, size: 26 }),
+                          new TextRun({ text: safeMotto, bold: true, font: safeFont, size: 26 }),
                         ],
                       }),
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         spacing: { before: 0 },
                         children: [
-                          new TextRun({ text: "────────────────", bold: true, font: fontFamily, size: 26 }),
+                          new TextRun({ text: "────────────────", bold: true, font: safeFont, size: 26 }),
                         ],
                       }),
                     ],
@@ -153,7 +173,7 @@ app.post('/api/generate-docx', async (req, res) => {
             new Paragraph({
               alignment: AlignmentType.RIGHT,
               children: [
-                new TextRun({ text: locationDate, font: fontFamily, size: 28, italics: true }),
+                new TextRun({ text: safeLocationDate, font: safeFont, size: 28, italics: true }),
               ],
             })
           ] : []),
@@ -165,9 +185,9 @@ app.post('/api/generate-docx', async (req, res) => {
             alignment: AlignmentType.CENTER,
             children: [
               new TextRun({ 
-                text: title.toUpperCase(), 
+                text: safeTitle.toUpperCase(), 
                 bold: true, 
-                font: fontFamily, 
+                font: safeFont, 
                 size: docType === 'regulation' ? 34 : 32 
               }),
             ],
@@ -177,7 +197,7 @@ app.post('/api/generate-docx', async (req, res) => {
             new Paragraph({
               alignment: AlignmentType.CENTER,
               children: [
-                new TextRun({ text: "───────", bold: true, font: fontFamily, size: 24 }),
+                new TextRun({ text: "───────", bold: true, font: safeFont, size: 24 }),
               ],
             })
           ] : []),
@@ -185,7 +205,7 @@ app.post('/api/generate-docx', async (req, res) => {
           new Paragraph({ spacing: { before: 400 } }),
 
           // Main Content
-          ...content.split('\n').map((line: string) => {
+          ...safeContent.split('\n').map((line: string) => {
             const isLineHeading = isHeading(line, boldLevel);
             const headLevel = getHeadingLevel(line);
             const shouldCenter = (headLevel === 100) || (alignLevel > 0 && headLevel > 0 && headLevel <= alignLevel);
@@ -201,7 +221,7 @@ app.post('/api/generate-docx', async (req, res) => {
               children: [
                 new TextRun({ 
                   text: line, 
-                  font: fontFamily, 
+                  font: safeFont, 
                   size: 28,
                   bold: isLineHeading && boldLevel > 0
                 }),
@@ -228,13 +248,13 @@ app.post('/api/generate-docx', async (req, res) => {
                     children: [
                       new Paragraph({
                         children: [
-                          new TextRun({ text: "Nơi nhận:", bold: true, font: fontFamily, size: 24, italics: true }),
+                          new TextRun({ text: "Nơi nhận:", bold: true, font: safeFont, size: 24, italics: true }),
                         ],
                       }),
-                      ...recipient.split('\n').map((r: string) => 
+                      ...safeRecipient.split('\n').map((r: string) => 
                         new Paragraph({
                           children: [
-                            new TextRun({ text: `- ${r}`, font: fontFamily, size: 22 }),
+                            new TextRun({ text: `- ${r}`, font: safeFont, size: 22 }),
                           ],
                         })
                       ),
@@ -247,7 +267,7 @@ app.post('/api/generate-docx', async (req, res) => {
                         new Paragraph({
                           alignment: AlignmentType.CENTER,
                           children: [
-                            new TextRun({ text: locationDate, font: fontFamily, size: 28, italics: true }),
+                            new TextRun({ text: safeLocationDate, font: safeFont, size: 28, italics: true }),
                           ],
                         }),
                         new Paragraph({ spacing: { before: 120 } }), // Tight spacing
@@ -255,14 +275,14 @@ app.post('/api/generate-docx', async (req, res) => {
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         children: [
-                          new TextRun({ text: signerPosition.toUpperCase(), bold: true, font: fontFamily, size: 28 }),
+                          new TextRun({ text: safeSignerPosition.toUpperCase(), bold: true, font: safeFont, size: 28 }),
                         ],
                       }),
                       new Paragraph({ spacing: { before: 1000 } }), // Space for signature
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         children: [
-                          new TextRun({ text: signerName, bold: true, font: fontFamily, size: 28 }),
+                          new TextRun({ text: safeSignerName, bold: true, font: safeFont, size: 28 }),
                         ],
                       }),
                     ],
@@ -282,17 +302,20 @@ app.post('/api/generate-docx', async (req, res) => {
     // Đặt các Header để trình duyệt hiểu đây là file download
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', 'attachment; filename=vanban_hanhchinh.docx');
+    res.setHeader('Content-Length', buffer.length.toString());
     
     // Gửi buffer
-    res.send(buffer);
+    res.end(buffer);
 
   } catch (error) {
     console.error('SERVER ERROR:', error);
-    res.status(500).json({ 
-      error: 'Lỗi máy chủ khi tạo văn bản', 
-      details: (error as Error).message,
-      stack: (error as Error).stack
-    });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Lỗi máy chủ khi tạo văn bản', 
+        details: (error as Error).message,
+        stack: (error as Error).stack
+      });
+    }
   }
 });
 

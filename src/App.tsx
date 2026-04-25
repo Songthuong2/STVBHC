@@ -779,11 +779,20 @@ export default function App() {
 
       if (!response.ok) {
         let errorMsg = 'Lỗi máy chủ khi tạo file';
-        try {
-          const errData = await response.json();
-          errorMsg = `${errData.error || errorMsg}\nChi tiết: ${errData.details || 'Không có'}`;
-        } catch (e) {
-          // Response is not JSON
+        const contentType = response.headers.get('content-type');
+        
+        if (contentType && contentType.includes('application/json')) {
+          try {
+            const errData = await response.json();
+            errorMsg = `${errData.error || errorMsg}\nChi tiết: ${errData.details || 'Không có'}`;
+          } catch (e) {
+            // Already handled
+          }
+        } else {
+          // Vercel might return HTML error
+          const text = await response.text();
+          console.error('Non-JSON error response:', text.substring(0, 500));
+          errorMsg = `Lỗi hệ thống Vercel (Status ${response.status}). Vui lòng kiểm tra Logs trên Vercel.`;
         }
         throw new Error(errorMsg);
       }
