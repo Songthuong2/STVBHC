@@ -781,7 +781,7 @@ export default function App() {
         let errorMsg = 'Lỗi máy chủ khi tạo file';
         try {
           const errData = await response.json();
-          errorMsg = errData.details || errData.error || errorMsg;
+          errorMsg = `${errData.error || errorMsg}\nChi tiết: ${errData.details || 'Không có'}`;
         } catch (e) {
           // Response is not JSON
         }
@@ -797,7 +797,7 @@ export default function App() {
       setTimeout(() => setShowSuccess(false), 3000);
     } catch (error) {
       console.error('Error generating document:', error);
-      alert('Có lỗi xảy ra khi tạo file Word. Vui lòng thử lại.');
+      alert(error instanceof Error ? error.message : 'Có lỗi xảy ra khi tạo file Word. Vui lòng thử lại.');
     } finally {
       setIsGenerating(false);
     }

@@ -15,6 +15,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString(), env: process.env.NODE_ENV });
+});
+
 // Helper for cm to twips conversion (1 cm = 567 twips)
 const cmToTwips = (cm: number) => Math.round(cm * 567);
 
@@ -115,7 +119,7 @@ app.post('/api/generate-docx', async (req, res) => {
                   }),
                   new TableCell({
                     width: { size: 67, type: WidthType.PERCENTAGE },
-                    children: docType === 'regulation' ? [] : [
+                    children: docType === 'regulation' ? [new Paragraph({ children: [] })] : [
                       new Paragraph({
                         alignment: AlignmentType.CENTER,
                         children: [
@@ -271,21 +275,23 @@ app.post('/api/generate-docx', async (req, res) => {
       }],
     });
 
+    console.log('Generating document buffer...');
     const buffer = await Packer.toBuffer(doc);
+    console.log('Buffer generated, size:', buffer.length);
     
     // Đặt các Header để trình duyệt hiểu đây là file download
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', 'attachment; filename=vanban_hanhchinh.docx');
     
-    // Gửi buffer trực tiếp
-    res.status(200).send(buffer);
+    // Gửi buffer
+    res.send(buffer);
 
   } catch (error) {
-    console.error('Docx generation error:', error);
+    console.error('SERVER ERROR:', error);
     res.status(500).json({ 
-      error: 'Failed to generate document', 
+      error: 'Lỗi máy chủ khi tạo văn bản', 
       details: (error as Error).message,
-      stack: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined 
+      stack: (error as Error).stack
     });
   }
 });
