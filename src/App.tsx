@@ -431,7 +431,11 @@ export default function App() {
         return;
       }
       console.error('Login error:', error);
-      alert(`Đăng nhập thất bại: ${error.message || 'Lỗi không xác định'}`);
+      if (error.code === 'auth/popup-blocked') {
+        alert('Trình duyệt đã chặn cửa sổ đăng nhập. Vui lòng nhấn vào biểu tượng "Cửa sổ bị chặn" trên thanh địa chỉ và chọn "Luôn cho phép" (Always allow popups) cho trang web này, sau đó thử đăng nhập lại.');
+      } else {
+        alert(`Đăng nhập thất bại: ${error.message || 'Lỗi không xác định'}`);
+      }
     }
   };
 
@@ -1048,9 +1052,12 @@ export default function App() {
           const headLevel = getHeadingLevel(line);
           const shouldCenter = (headLevel === 100) || (formData.alignLevel > 0 && headLevel > 0 && headLevel <= formData.alignLevel);
 
-          // Recursive parser for selection-based tags to hide markers in preview
+            // Recursive parser for selection-based tags to hide markers in preview
           const parseContent = (text: string): React.ReactNode => {
-            const combinedRegex = /(\*\*(.+?)\*\*)|(\[f:(.+?)\](.+?)\[\/f\])|(\[a:(.+?)\](.+?)\[\/a\])/g;
+            if (!text) return "";
+            
+            // Refined regex for bold, font, and alignment. Using non-greedy and explicit escaping.
+            const combinedRegex = /(\*{2}(.+?)\*{2})|(\[f:([^\]]+?)\](.+?)\[\/f\])|(\[a:([^\]]+?)\](.+?)\[\/a\])/g;
             const parts: (string | React.ReactNode)[] = [];
             let lastIdx = 0;
             let match;
@@ -1061,11 +1068,11 @@ export default function App() {
                 parts.push(text.substring(lastIdx, match.index));
               }
 
-              if (match[1]) { // Bold
+              if (match[1]) { // Bold: **text**
                 parts.push(<strong key={`${j}-${partKey++}`}>{parseContent(match[2])}</strong>);
-              } else if (match[3]) { // Font
+              } else if (match[3]) { // Font: [f:name]text[/f]
                 parts.push(<span key={`${j}-${partKey++}`} style={{ fontFamily: match[4] }}>{parseContent(match[5])}</span>);
-              } else if (match[6]) { // Align
+              } else if (match[6]) { // Align: [a:type]text[/a]
                 parts.push(<span key={`${j}-${partKey++}`} className="inline-block" style={{ textAlign: match[7] as any }}>{parseContent(match[8])}</span>);
               }
               lastIdx = combinedRegex.lastIndex;
@@ -1075,7 +1082,7 @@ export default function App() {
               parts.push(text.substring(lastIdx));
             }
 
-            return parts.length > 0 ? parts : text;
+            return parts.length > 0 ? <React.Fragment key={`line-${j}`}>{parts}</React.Fragment> : text;
           };
 
           return (

@@ -25,8 +25,8 @@ const cmToTwips = (cm: number) => Math.round(cm * 567);
 const parseStyledText = (text: string, defaultFont: string, currentBold: boolean, currentFont: string): TextRun[] => {
   if (!text) return [];
   
-  // Combined regex to find matches in order, using non-greedy matches
-  const combinedRegex = /(\*\*(.+?)\*\*)|(\[f:(.+?)\](.+?)\[\/f\])|(\[a:(.+?)\](.+?)\[\/a\])/g;
+  // Refined regex for bold, font, and alignment. Using non-greedy and explicit escaping.
+  const combinedRegex = /(\*{2}(.+?)\*{2})|(\[f:([^\]]+?)\](.+?)\[\/f\])|(\[a:([^\]]+?)\](.+?)\[\/a\])/g;
   const runs: TextRun[] = [];
   let lastIdx = 0;
   let match;
