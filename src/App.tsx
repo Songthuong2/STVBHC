@@ -14,6 +14,7 @@ import {
   ChevronDown, 
   Undo2, 
   Redo2, 
+  Wand2,
   Layout, 
   Upload, 
   Maximize, 
@@ -58,7 +59,6 @@ import {
   User
 } from './lib/firebase';
 import { AITemplateAssistant } from './components/AITemplateAssistant';
-import { editContentWithAI } from './services/geminiService';
 
 // Initialize Gemini AI (Lazy initialization)
 let genAIInstance: GoogleGenAI | null = null;
@@ -275,13 +275,14 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
   const [isCheckingSpell, setIsCheckingSpell] = useState(false);
+  const [isRewriting, setIsRewriting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showConvertMenu, setShowConvertMenu] = useState(false);
-  const [history, setHistory] = useState<DocFormData[]>([]);
-  const [future, setFuture] = useState<DocFormData[]>([]);
+  const [history, setHistory] = useState<string[]>([]);
+  const [future, setFuture] = useState<string[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -296,9 +297,60 @@ export default function App() {
   const [isPreviewEditor, setIsPreviewEditor] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<DocTemplate | null>(null);
   const [isLoadingDocs, setIsLoadingDocs] = useState(false);
-  const lastHistorySaveRef = useRef<number>(0);
-  const historyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const contentRef = useRef<HTMLTextAreaElement>(null);
+  const lastContentRef = useRef<string>(INITIAL_DATA.content);
+  const isInternalChangeRef = useRef<boolean>(false);
+
+  // Auto history for typing/changes
+  useEffect(() => {
+    if (isInternalChangeRef.current) {
+      isInternalChangeRef.current = false;
+      lastContentRef.current = formData.content;
+      return;
+    }
+
+    if (formData.content === lastContentRef.current) return;
+
+    const timer = setTimeout(() => {
+      const current = formData.content;
+      const last = lastContentRef.current;
+      
+      if (current !== last) {
+        setHistory(prev => {
+          // Avoid pushing same state twice
+          if (prev.length > 0 && prev[prev.length - 1] === last) return prev;
+          return [...prev, last].slice(-100);
+        });
+        setFuture([]);
+        lastContentRef.current = current;
+      }
+    }, 400); // 400ms debounce for better responsiveness
+
+    return () => clearTimeout(timer);
+  }, [formData.content]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is in an input/textarea but handled by browser
+      // However, since we manage state, we want our custom logic to prevail
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'z' || e.key === 'Z') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            redo();
+          } else {
+            undo();
+          }
+        } else if (e.key === 'y' || e.key === 'Y') {
+          e.preventDefault();
+          redo();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [formData.content, history, future]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -612,7 +664,7 @@ export default function App() {
 
 
   const loadTemplate = (template: typeof TEMPLATES[0]) => {
-    pushToHistory(formData);
+    pushToHistory(formData.content);
     setFormData(prev => ({
       ...prev,
       ...template.data
@@ -620,52 +672,67 @@ export default function App() {
     setActiveTemplate(template.id);
   };
 
-  const pushToHistory = (currentData: DocFormData) => {
-    setHistory(prev => [...prev, { ...currentData }].slice(-50)); // Limit history to 50 steps
+  const pushToHistory = (contentToSave: string) => {
+    setHistory(prev => {
+      if (prev.length > 0 && prev[prev.length - 1] === contentToSave) return prev;
+      return [...prev, contentToSave].slice(-100);
+    });
     setFuture([]);
+    lastContentRef.current = contentToSave;
+    isInternalChangeRef.current = true;
   };
 
   const undo = () => {
+    const current = formData.content;
+    const last = lastContentRef.current;
+
+    // Case 1: Typing gap - if current content differs from last committed state
+    if (current !== last) {
+      setFuture(prev => [current, ...prev]);
+      isInternalChangeRef.current = true;
+      lastContentRef.current = last;
+      setFormData(prev => ({ ...prev, content: last }));
+      return;
+    }
+
+    // Case 2: Standard undo from history
     if (history.length === 0) return;
+    
     const previous = history[history.length - 1];
     setHistory(prev => prev.slice(0, -1));
-    setFuture(prev => [formData, ...prev]);
-    setFormData(previous);
+    setFuture(prev => [current, ...prev]);
+    
+    isInternalChangeRef.current = true;
+    lastContentRef.current = previous;
+    setFormData(prev => ({ ...prev, content: previous }));
   };
 
   const redo = () => {
     if (future.length === 0) return;
     const [next, ...remainingFuture] = future;
+    
+    // Push current to history before moving forward
+    setHistory(prev => [...prev, formData.content].slice(-100));
     setFuture(remainingFuture);
-    setHistory(prev => [...prev, formData]);
-    setFormData(next);
+    
+    isInternalChangeRef.current = true;
+    lastContentRef.current = next;
+    setFormData(prev => ({ ...prev, content: next }));
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    
     if (name === 'content') {
-      const now = Date.now();
-      // Save history before change if it's been a while (e.g. 3 seconds) since last save
-      if (now - lastHistorySaveRef.current > 3000) {
-        pushToHistory(formData);
-        lastHistorySaveRef.current = now;
-      }
-
-      // Refresh the "idle" timer to ensure we save the state after typing stops
-      if (historyTimeoutRef.current) clearTimeout(historyTimeoutRef.current);
-      historyTimeoutRef.current = setTimeout(() => {
-        lastHistorySaveRef.current = 0; // Next change will push to history
-      }, 1500);
+      // For character typing, we could debounce history pushing, but for now we push on every significant change or just keep it simple
+      // A common pattern is to only push to history on blur or after a pause
     }
-
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const convertEncoding = async (from: 'tcvn3' | 'vni') => {
     if (!formData.content.trim()) return;
     
-    pushToHistory(formData);
+    pushToHistory(formData.content);
     setIsCleaning(true);
     try {
       const prompt = `Chuyển mã nội dung sau từ bảng mã ${from === 'tcvn3' ? 'TCVN3 (ABC)' : 'VNI-Windows'} sang Unicode.
@@ -693,7 +760,7 @@ export default function App() {
   const checkSpellWithAI = async () => {
     if (!formData.content.trim()) return;
     
-    pushToHistory(formData);
+    pushToHistory(formData.content);
     setIsCheckingSpell(true);
     try {
       const prompt = `Kiểm tra và sửa lỗi chính tả cho văn bản hành chính sau đây.
@@ -718,7 +785,7 @@ export default function App() {
   };
 
   const convertCase = (type: 'upper' | 'lower' | 'sentence' | 'no-accent') => {
-    pushToHistory(formData);
+    pushToHistory(formData.content);
     let text = formData.content;
     if (type === 'upper') {
       text = text.toUpperCase();
@@ -740,7 +807,7 @@ export default function App() {
   const cleanContentWithAI = async () => {
     if (!formData.content.trim()) return;
     
-    pushToHistory(formData);
+    pushToHistory(formData.content);
     setIsCleaning(true);
     try {
       const prompt = `Bạn là một chuyên gia về soạn thảo văn bản hành chính Việt Nam. Hãy làm sạch và chuẩn hóa nội dung văn bản sau đây.
@@ -767,6 +834,94 @@ export default function App() {
     } finally {
       setIsCleaning(false);
     }
+  };
+
+  const rewriteWithAI = async () => {
+    if (!formData.content.trim()) return;
+    
+    pushToHistory(formData.content);
+    setIsRewriting(true);
+    try {
+      const docType = formData.title.split('\n')[0].trim() || 'Văn bản hành chính';
+      const prompt = `Bạn là một chuyên gia soạn thảo văn bản hành chính Việt Nam chuyên nghiệp. 
+      Hãy viết lại nội dung văn bản sau đây theo đúng lối văn và phong cách của loại văn bản: "${docType}".
+
+      YÊU CẦU BẮT BUỘC:
+      1. CHỈ viết lại phần nội dung chính (phần thân văn bản).
+      2. LOẠI BỎ các thành phần sau nếu xuất hiện trong nội dung: Quốc hiệu, Tiêu ngữ, Tên đơn vị (phần Header), Số hiệu, Địa danh/Ngày tháng (đầu trang), Nơi nhận, và phần Ký tên của lãnh đạo.
+      3. GIỮ NGUYÊN các thông tin mẫu hoặc biến số có sẵn trong văn bản gốc (ví dụ: [Tên đơn vị], [Địa danh], [Số lượng], ...). KHÔNG tự ý tạo thêm các biến số mới nếu gốc không có.
+      4. Sử dụng ngôn ngữ hành chính chuẩn mực, trang trọng, chặt chẽ, đúng quy chuẩn pháp luật.
+      5. Giữ nguyên các thông tin cốt lõi, số liệu và ý chính.
+      6. Trả về DUY NHẤT nội dung đã được viết lại, không giải thích gì thêm.
+
+      Nội dung gốc:
+      "${formData.content}"`;
+
+      const rewrittenText = await callAI(prompt);
+      if (rewrittenText) {
+        setFormData(prev => ({ ...prev, content: rewrittenText.trim() }));
+      }
+    } catch (error) {
+      console.error('Error rewriting content with AI:', error);
+      alert('Không thể kết nối với AI để viết lại văn bản. Vui lòng kiểm tra lại.');
+    } finally {
+      setIsRewriting(false);
+    }
+  };
+
+  const applyFormatting = (tag: string, endTag?: string) => {
+    if (!contentRef.current) return;
+    
+    const start = contentRef.current.selectionStart;
+    const end = contentRef.current.selectionEnd;
+    const text = formData.content;
+    const selectedText = text.substring(start, end);
+    
+    if (start === end) return false; // No selection
+
+    const actualEndTag = endTag || tag;
+    
+    let newContent;
+    let newStart = start;
+    let newEnd = end;
+
+    // Cases for toggling off:
+    // 1. Selection includes the tags: **text**
+    const isWrappedSelection = selectedText.startsWith(tag) && selectedText.endsWith(actualEndTag);
+    
+    // 2. Selection is inside the tags: [tag]text[tag]
+    const beforeSelection = text.substring(Math.max(0, start - tag.length), start);
+    const afterSelection = text.substring(end, Math.min(text.length, end + actualEndTag.length));
+    const isInsideTags = beforeSelection === tag && afterSelection === actualEndTag;
+
+    if (isWrappedSelection) {
+      pushToHistory(text);
+      const unwrapped = selectedText.substring(tag.length, selectedText.length - actualEndTag.length);
+      newContent = text.substring(0, start) + unwrapped + text.substring(end);
+      newEnd = start + unwrapped.length;
+    } else if (isInsideTags) {
+      pushToHistory(text);
+      newContent = text.substring(0, start - tag.length) + selectedText + text.substring(end + actualEndTag.length);
+      newStart = start - tag.length;
+      newEnd = end - tag.length;
+    } else {
+      pushToHistory(text);
+      newContent = text.substring(0, start) + tag + selectedText + actualEndTag + text.substring(end);
+      newStart = start + tag.length;
+      newEnd = end + tag.length;
+    }
+    
+    setFormData(prev => ({ ...prev, content: newContent }));
+    
+    // Reset focus and selection
+    setTimeout(() => {
+      if (contentRef.current) {
+        contentRef.current.focus();
+        contentRef.current.setSelectionRange(newStart, newEnd);
+      }
+    }, 10);
+    
+    return true;
   };
 
   const handleMarginChange = (side: keyof DocMargins, value: string) => {
@@ -888,14 +1043,44 @@ export default function App() {
       </div>
 
       <div className="text-[14pt] leading-relaxed text-justify mb-16 whitespace-pre-wrap relative z-10 text-black">
-        {formData.content.split('\n').map((line, i) => {
+        {formData.content.split('\n').map((line, j) => {
           const isLineHeading = isHeading(line, formData.boldLevel);
           const headLevel = getHeadingLevel(line);
           const shouldCenter = (headLevel === 100) || (formData.alignLevel > 0 && headLevel > 0 && headLevel <= formData.alignLevel);
 
+          // Recursive parser for selection-based tags to hide markers in preview
+          const parseContent = (text: string): React.ReactNode => {
+            const combinedRegex = /(\*\*(.+?)\*\*)|(\[f:(.+?)\](.+?)\[\/f\])|(\[a:(.+?)\](.+?)\[\/a\])/g;
+            const parts: (string | React.ReactNode)[] = [];
+            let lastIdx = 0;
+            let match;
+            let partKey = 0;
+
+            while ((match = combinedRegex.exec(text)) !== null) {
+              if (match.index > lastIdx) {
+                parts.push(text.substring(lastIdx, match.index));
+              }
+
+              if (match[1]) { // Bold
+                parts.push(<strong key={`${j}-${partKey++}`}>{parseContent(match[2])}</strong>);
+              } else if (match[3]) { // Font
+                parts.push(<span key={`${j}-${partKey++}`} style={{ fontFamily: match[4] }}>{parseContent(match[5])}</span>);
+              } else if (match[6]) { // Align
+                parts.push(<span key={`${j}-${partKey++}`} className="inline-block" style={{ textAlign: match[7] as any }}>{parseContent(match[8])}</span>);
+              }
+              lastIdx = combinedRegex.lastIndex;
+            }
+
+            if (lastIdx < text.length) {
+              parts.push(text.substring(lastIdx));
+            }
+
+            return parts.length > 0 ? parts : text;
+          };
+
           return (
             <p 
-              key={i} 
+              key={j} 
               className={`min-h-[1.5em] ${isLineHeading && formData.boldLevel > 0 ? 'font-bold' : ''}`}
               style={{ 
                 textIndent: (line.trim() && !isLineHeading) ? '1.27cm' : '0',
@@ -904,7 +1089,7 @@ export default function App() {
                 color: '#000000'
               }}
             >
-              {line}
+              {parseContent(line)}
             </p>
           );
         })}
@@ -968,13 +1153,6 @@ export default function App() {
             >
               <Bot size={14} /> 
               <span className="hidden sm:inline">AI Trợ lý</span>
-            </button>
-            <button 
-              onClick={() => setShowPreviewModal(true)}
-              className="px-3 py-1.5 hover:bg-white text-slate-700 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-2 border border-transparent hover:border-slate-200"
-            >
-              <Eye size={14} className="text-amber-500" /> 
-              <span className="hidden sm:inline">Xem trước</span>
             </button>
           </div>
 
@@ -1230,53 +1408,158 @@ export default function App() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between bg-slate-900 rounded-xl p-1 shadow-lg shadow-slate-200">
                     <div className="flex items-center gap-1">
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowConvertMenu(!showConvertMenu)}
-                        className="p-2 text-white hover:bg-white/10 rounded-lg transition-all group"
-                        title="Định dạng font"
-                      >
-                        <TypeIcon size={16} />
-                      </button>
-                      <AnimatePresence>
-                        {showConvertMenu && (
-                          <>
-                            <div className="fixed inset-0 z-30" onClick={() => setShowConvertMenu(false)}></div>
-                            <motion.div 
-                              initial={{ opacity: 0, y: 10 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, y: 10 }}
-                              className="absolute left-0 top-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 w-48 z-40 overflow-hidden"
-                            >
-                              <button onClick={() => { convertCase('upper'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-indigo-50 text-slate-700 font-bold">IN HOA</button>
-                              <button onClick={() => { convertCase('sentence'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-indigo-50 text-slate-700 font-medium">Viết hoa đầu dòng</button>
-                              <div className="h-px bg-slate-100 my-1"></div>
-                              <button onClick={() => { convertEncoding('tcvn3'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-red-50 text-red-600 font-bold">Sửa lỗi TCVN3</button>
-                              <button onClick={() => { convertEncoding('vni'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-red-50 text-red-600 font-bold">Sửa lỗi VNI</button>
-                            </motion.div>
-                          </>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                      <button
-                        onClick={() => setFormData(prev => ({ ...prev, boldLevel: (prev.boldLevel + 1) % 4 }))}
-                        className={`p-2 rounded-lg transition-all ${formData.boldLevel > 0 ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-white/10'}`}
-                        title="Tô đậm tiêu đề"
-                      >
-                        <TypeIcon size={16} strokeWidth={3} />
-                      </button>
-                      <button
-                        onClick={() => setFormData(prev => ({ ...prev, alignLevel: (prev.alignLevel + 1) % 4 }))}
-                        className={`p-2 rounded-lg transition-all ${formData.alignLevel > 0 ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-white/10'}`}
-                      >
-                        <AlignCenter size={16} />
-                      </button>
+                      <div className="relative">
+                        <button
+                          onClick={() => {
+                            const hasSelection = contentRef.current && contentRef.current.selectionStart !== contentRef.current.selectionEnd;
+                            if (hasSelection) {
+                              const fonts = ['Arial', 'Roboto', 'Courier New', 'Georgia'];
+                              const text = formData.content;
+                              const start = contentRef.current!.selectionStart;
+                              const end = contentRef.current!.selectionEnd;
+                              const selectedText = text.substring(start, end);
+                              
+                              // Check if selection is already wrapped in a font tag [f:Name]...[/f]
+                              const fontMatch = selectedText.match(/^\[f:([^\]]*)\](.*)\[\/f\]$/s);
+                              const internalText = fontMatch ? fontMatch[2] : selectedText;
+                              const currentLocalFont = fontMatch ? fontMatch[1] : "";
+                              
+                              let nextFont = "";
+                              if (!fontMatch || currentLocalFont === "") {
+                                nextFont = fonts[0]; // Start with Arial
+                              } else {
+                                const currentIndex = fonts.indexOf(currentLocalFont);
+                                if (currentIndex === -1 || currentIndex === fonts.length - 1) {
+                                  nextFont = ""; // Return to default
+                                } else {
+                                  nextFont = fonts[currentIndex + 1];
+                                }
+                              }
+
+                              pushToHistory(text);
+                              let newContent;
+                              if (nextFont === "") {
+                                newContent = text.substring(0, start) + internalText + text.substring(end);
+                              } else {
+                                const newTag = `[f:${nextFont}]`;
+                                newContent = text.substring(0, start) + newTag + internalText + "[/f]" + text.substring(end);
+                              }
+                              
+                              setFormData(prev => ({ ...prev, content: newContent }));
+                              
+                              // Reset focus and selection
+                              setTimeout(() => {
+                                if (contentRef.current) {
+                                  contentRef.current.focus();
+                                  if (nextFont === "") {
+                                    contentRef.current.setSelectionRange(start, start + internalText.length);
+                                  } else {
+                                    const tagOffset = `[f:${nextFont}]`.length;
+                                    contentRef.current.setSelectionRange(start, start + tagOffset + internalText.length + 4);
+                                  }
+                                }
+                              }, 10);
+                            } else {
+                              setShowConvertMenu(!showConvertMenu);
+                            }
+                          }}
+                          className="p-2 text-white hover:bg-white/10 rounded-lg transition-all group"
+                          title="Định dạng font (Bôi đen để áp dụng cho vùng chọn)"
+                        >
+                          <span className="text-sm font-bold w-4 h-4 flex items-center justify-center">F</span>
+                        </button>
+                        <AnimatePresence>
+                          {showConvertMenu && (
+                            <>
+                              <div className="fixed inset-0 z-30" onClick={() => setShowConvertMenu(false)}></div>
+                              <motion.div 
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 10 }}
+                                className="absolute left-0 top-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 w-48 z-40 overflow-hidden"
+                              >
+                                <div className="px-4 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-50">Phông chữ hệ thống</div>
+                                {['Arial', 'Roboto', 'Courier New', 'Georgia'].map(font => (
+                                  <button 
+                                    key={font}
+                                    onClick={() => {
+                                      setFormData(prev => ({ ...prev, fontFamily: font }));
+                                      setShowConvertMenu(false);
+                                    }} 
+                                    className={`w-full text-left px-4 py-2 text-xs hover:bg-indigo-50 ${formData.fontFamily === font ? 'text-indigo-600 font-bold' : 'text-slate-700 font-medium'}`}
+                                    style={{ fontFamily: font }}
+                                  >
+                                    {font}
+                                  </button>
+                                ))}
+                                <button 
+                                  onClick={() => {
+                                    setFormData(prev => ({ ...prev, fontFamily: "Times New Roman" }));
+                                    setShowConvertMenu(false);
+                                  }} 
+                                  className={`w-full text-left px-4 py-2 text-xs hover:bg-indigo-50 ${formData.fontFamily === "Times New Roman" ? 'text-indigo-600 font-bold' : 'text-slate-700 font-medium'}`}
+                                  style={{ fontFamily: "Times New Roman" }}
+                                >
+                                  Mặc định (Times New Roman)
+                                </button>
+                                <div className="h-px bg-slate-100 my-1"></div>
+                                <div className="px-4 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-50">Công cụ chuyển đổi</div>
+                                <button onClick={() => { convertCase('upper'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-indigo-50 text-slate-700 font-bold">IN HOA</button>
+                                <button onClick={() => { convertCase('sentence'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-indigo-50 text-slate-700 font-medium">Viết hoa đầu dòng</button>
+                                <div className="h-px bg-slate-100 my-1"></div>
+                                <button onClick={() => { convertEncoding('tcvn3'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-red-50 text-red-600 font-bold">Sửa lỗi TCVN3</button>
+                                <button onClick={() => { convertEncoding('vni'); setShowConvertMenu(false); }} className="w-full text-left px-4 py-2 text-xs hover:bg-red-50 text-red-600 font-bold">Sửa lỗi VNI</button>
+                              </motion.div>
+                            </>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                        <button
+                          onClick={() => {
+                            const applied = applyFormatting('**');
+                            if (!applied) {
+                              setFormData(prev => ({ ...prev, boldLevel: (prev.boldLevel + 1) % 4 }));
+                            }
+                          }}
+                          className={`p-2 rounded-lg transition-all ${formData.boldLevel > 0 ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-white/10'}`}
+                          title="Tô đậm (Bôi đen để áp dụng cho vùng chọn)"
+                        >
+                          <span className="text-sm font-black w-4 h-4 flex items-center justify-center">B</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            const applied = applyFormatting('[a:center]', '[/a]');
+                            if (!applied) {
+                              setFormData(prev => ({ ...prev, alignLevel: (prev.alignLevel + 1) % 4 }));
+                            }
+                          }}
+                          className={`p-2 rounded-lg transition-all ${formData.alignLevel > 0 ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-white/10'}`}
+                        >
+                          <AlignCenter size={16} />
+                        </button>
                       <button
                         onClick={() => setShowPreviewModal(true)}
                         className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white/10 rounded-lg transition-all"
                         title="Xem trước mẫu chuẩn"
                       >
                         <Eye size={16} />
+                      </button>
+                      <div className="w-[1px] h-4 bg-white/10 mx-1"></div>
+                      <button
+                        onClick={undo}
+                        disabled={!(history.length > 0 || formData.content !== lastContentRef.current)}
+                        className={`p-2 rounded-lg transition-all ${history.length > 0 || formData.content !== lastContentRef.current ? 'text-slate-400 hover:text-white hover:bg-white/10' : 'text-slate-600 opacity-30 cursor-not-allowed'}`}
+                        title="Hoàn tác (Ctrl+Z)"
+                      >
+                        <Undo2 size={16} />
+                      </button>
+                      <button
+                        onClick={redo}
+                        disabled={future.length === 0}
+                        className={`p-2 rounded-lg transition-all ${future.length > 0 ? 'text-slate-400 hover:text-white hover:bg-white/10' : 'text-slate-600 opacity-30 cursor-not-allowed'}`}
+                        title="Làm lại (Ctrl+Y)"
+                      >
+                        <Redo2 size={16} />
                       </button>
                     </div>
                     <div className="flex items-center gap-1 pr-1">
@@ -1287,6 +1570,14 @@ export default function App() {
                       >
                         {isCheckingSpell ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
                         CHÍNH TẢ
+                      </button>
+                      <button
+                        onClick={rewriteWithAI}
+                        disabled={isRewriting}
+                        className="p-1 px-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5"
+                      >
+                        {isRewriting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                        AI REWRITE
                       </button>
                       <button
                         onClick={cleanContentWithAI}
@@ -1304,24 +1595,6 @@ export default function App() {
                        <FileText size={12} className="text-indigo-500" />
                        Nội dung văn bản
                     </h3>
-                    <div className="flex items-center gap-2">
-                      <button 
-                        onClick={undo} 
-                        disabled={history.length === 0}
-                        className={`p-1.5 rounded-lg transition-all ${history.length > 0 ? 'text-slate-600 hover:bg-slate-200' : 'text-slate-300 opacity-50 cursor-not-allowed'}`}
-                        title="Hoàn tác (Ctrl+Z)"
-                      >
-                        <Undo2 size={14} />
-                      </button>
-                      <button 
-                        onClick={redo} 
-                        disabled={future.length === 0}
-                        className={`p-1.5 rounded-lg transition-all ${future.length > 0 ? 'text-slate-600 hover:bg-slate-200' : 'text-slate-300 opacity-50 cursor-not-allowed'}`}
-                        title="Làm lại (Ctrl+Y)"
-                      >
-                        <Redo2 size={14} />
-                      </button>
-                    </div>
                   </div>
 
                   <div className="relative group">
@@ -1348,8 +1621,8 @@ export default function App() {
 
                     <textarea 
                       name="content"
+                      ref={contentRef}
                       value={formData.content}
-                      onFocus={() => pushToHistory(formData)}
                       onChange={handleInputChange}
                       onKeyDown={(e) => {
                         if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
@@ -1973,22 +2246,8 @@ export default function App() {
           <AITemplateAssistant 
             userId={user.uid}
             onClose={() => setShowAIAssistant(false)}
-            onEditContent={async (instruction) => {
-              try {
-                const newContent = await editContentWithAI(formData.content, instruction);
-                if (newContent) {
-                  pushToHistory(formData);
-                  setFormData(prev => ({ ...prev, content: newContent }));
-                  return newContent;
-                }
-                return formData.content;
-              } catch (error) {
-                console.error("AI Edit Error:", error);
-                throw error;
-              }
-            }}
             onApplyDocData={(data) => {
-              pushToHistory(formData);
+              pushToHistory(formData.content);
               setFormData(prev => ({
                 ...prev,
                 ...data

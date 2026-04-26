@@ -22,6 +22,61 @@ app.get('/api/health', (req, res) => {
 // Helper for cm to twips conversion (1 cm = 567 twips)
 const cmToTwips = (cm: number) => Math.round(cm * 567);
 
+const parseStyledText = (text: string, defaultFont: string, currentBold: boolean, currentFont: string): TextRun[] => {
+  // Combined regex to find matches in order, using non-greedy matches
+  const combinedRegex = /(\*\*(.+?)\*\*)|(\[f:(.+?)\](.+?)\[\/f\])|(\[a:(.+?)\](.+?)\[\/a\])/g;
+  const runs: TextRun[] = [];
+  let lastIdx = 0;
+  let match;
+
+  while ((match = combinedRegex.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      const partText = text.substring(lastIdx, match.index);
+      if (partText) {
+        runs.push(new TextRun({
+          text: partText,
+          font: currentFont || defaultFont,
+          size: 28,
+          bold: currentBold
+        }));
+      }
+    }
+
+    if (match[1]) { // Bold: **text**
+      runs.push(...parseStyledText(match[2], defaultFont, true, currentFont || defaultFont));
+    } else if (match[3]) { // Font: [f:name]text[/f]
+      runs.push(...parseStyledText(match[5], defaultFont, currentBold, match[4]));
+    } else if (match[6]) { // Align: [a:type]text[/a]
+      // Inline alignment is just text in Word runs, skip the alignment tags
+      runs.push(...parseStyledText(match[8], defaultFont, currentBold, currentFont || defaultFont));
+    }
+    lastIdx = combinedRegex.lastIndex;
+  }
+
+  if (lastIdx < text.length) {
+    const partText = text.substring(lastIdx);
+    if (partText) {
+      runs.push(new TextRun({
+        text: partText,
+        font: currentFont || defaultFont,
+        size: 28,
+        bold: currentBold
+      }));
+    }
+  }
+
+  if (runs.length === 0 && text.length > 0) {
+    runs.push(new TextRun({
+      text: text,
+      font: currentFont || defaultFont,
+      size: 28,
+      bold: currentBold
+    }));
+  }
+
+  return runs;
+};
+
 const getHeadingLevel = (line: string) => {
   const trimmed = line.trim();
   if (!trimmed) return 0;
@@ -218,14 +273,7 @@ app.post('/api/generate-docx', async (req, res) => {
                 before: 120, 
                 after: 120 
               },
-              children: [
-                new TextRun({ 
-                  text: line, 
-                  font: safeFont, 
-                  size: 28,
-                  bold: isLineHeading && boldLevel > 0
-                }),
-              ],
+              children: parseStyledText(line, safeFont, isLineHeading && boldLevel > 0, ""),
             });
           }),
 
