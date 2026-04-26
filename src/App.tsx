@@ -426,13 +426,12 @@ export default function App() {
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
-      if (error.code === 'auth/popup-closed-by-user') {
-        console.log('User closed the login popup.');
+      if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
         return;
       }
       console.error('Login error:', error);
       if (error.code === 'auth/popup-blocked') {
-        alert('Trình duyệt đã chặn cửa sổ đăng nhập. Vui lòng nhấn vào biểu tượng "Cửa sổ bị chặn" trên thanh địa chỉ và chọn "Luôn cho phép" (Always allow popups) cho trang web này, sau đó thử đăng nhập lại.');
+        alert('Trình duyệt Cốc Cốc/Chrome đã chặn cửa sổ đăng nhập.\n\nHướng dẫn cho phép:\n1. Nhấn vào biểu tượng Ổ KHÓA 🔒 bên trái địa chỉ trang web.\n2. Tìm "Cửa sổ bật lên" (Pop-ups) và chọn "Cho phép" (Allow).\n3. Tải lại trang và thử lại.');
       } else {
         alert(`Đăng nhập thất bại: ${error.message || 'Lỗi không xác định'}`);
       }
