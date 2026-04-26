@@ -27,6 +27,7 @@ import {
   AlignCenter,
   AlignLeft,
   Trash2,
+  AlertCircle,
   Bot 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -276,6 +277,13 @@ export default function App() {
   const [isCleaning, setIsCleaning] = useState(false);
   const [isCheckingSpell, setIsCheckingSpell] = useState(false);
   const [isRewriting, setIsRewriting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmDeleteTemplateId, setConfirmDeleteTemplateId] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [restorePoint, setRestorePoint] = useState<string>('');
+  const [majorRestorePoints, setMajorRestorePoints] = useState<{ content: string; label: string; timestamp: Date }[]>([]);
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -301,6 +309,17 @@ export default function App() {
   const contentRef = useRef<HTMLTextAreaElement>(null);
   const lastContentRef = useRef<string>(INITIAL_DATA.content);
   const isInternalChangeRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (!restorePoint && formData.content.trim() && !isGenerating && !isCleaning && !isRewriting && !isCheckingSpell) {
+      const timer = setTimeout(() => {
+        if (!restorePoint && formData.content) {
+          setRestorePoint(formData.content);
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [formData.content, restorePoint, isGenerating, isCleaning, isRewriting, isCheckingSpell]);
 
   // Auto history for typing/changes
   useEffect(() => {
@@ -431,9 +450,9 @@ export default function App() {
       }
       console.error('Login error:', error);
       if (error.code === 'auth/popup-blocked') {
-        alert('Trình duyệt Cốc Cốc/Chrome đã chặn cửa sổ đăng nhập.\n\nHướng dẫn cho phép:\n1. Nhấn vào biểu tượng Ổ KHÓA 🔒 bên trái địa chỉ trang web.\n2. Tìm "Cửa sổ bật lên" (Pop-ups) và chọn "Cho phép" (Allow).\n3. Tải lại trang và thử lại.');
+        setErrorMessage('TRÌNH DUYỆT ĐÃ CHẶN CỬA SỔ ĐĂNG NHẬP\n\nĐể đăng nhập, vui lòng:\n1. Nhìn lên thanh địa chỉ của trình duyệt.\n2. Nhấn vào biểu tượng "Cửa sổ bị chặn" (thường có dấu X đỏ hoặc hình ổ khóa).\n3. Chọn "Always allow popups" (Luôn cho phép) cho trang web này.\n4. Tải lại trang và thử lại.');
       } else {
-        alert(`Đăng nhập thất bại: ${error.message || 'Lỗi không xác định'}`);
+        setErrorMessage(`Đăng nhập thất bại: ${error.message || 'Lỗi không xác định'}`);
       }
     }
   };
@@ -474,17 +493,32 @@ export default function App() {
   const loadSavedDocument = (savedDoc: any) => {
     const { id, userId, createdAt, updatedAt, ...rest } = savedDoc;
     setFormData(rest);
+    setAsRestorePoint(rest.content || '', 'Mở từ lịch sử');
     setShowHistoryModal(false);
   };
 
-  const deleteDocument = async (docId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm('Bạn có chắc muốn xóa văn bản này?')) return;
+  const deleteDocument = async (docId: string, e?: React.MouseEvent) => {
+    // Stop propagation
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    
+    if (!docId) return;
 
     try {
-      await deleteDoc(doc(db, 'documents', docId));
-    } catch (error) {
+      setIsDeleting(docId);
+      const docReference = doc(db, 'documents', docId);
+      await deleteDoc(docReference);
+      
+      setConfirmDeleteId(null);
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+    } catch (error: any) {
+      console.error('Firestore delete error:', error);
       handleFirestoreError(error, OperationType.DELETE, `documents/${docId}`);
+    } finally {
+      setIsDeleting(null);
     }
   };
 
@@ -495,7 +529,7 @@ export default function App() {
     }
 
     if (!editingTemplate?.name) {
-      alert('Vui lòng nhập tên mẫu');
+      setErrorMessage('Vui lòng nhập tên mẫu trước khi lưu.');
       return;
     }
 
@@ -522,10 +556,16 @@ export default function App() {
 
   const deleteTemplate = async (templateId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm('Bạn có chắc muốn xóa mẫu này?')) return;
+    if (confirmDeleteTemplateId !== templateId) {
+      setConfirmDeleteTemplateId(templateId);
+      return;
+    }
 
     try {
       await deleteDoc(doc(db, 'templates', templateId));
+      setConfirmDeleteTemplateId(null);
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `templates/${templateId}`);
     }
@@ -539,6 +579,7 @@ export default function App() {
         ...prev,
         ...template.data
       }));
+      setAsRestorePoint(template.data.content || '', `Mẫu: ${template.data.name || 'AI'}`);
       setActiveTemplate(template.id);
       setShowTemplateModal(false);
       return;
@@ -550,6 +591,7 @@ export default function App() {
       ...prev,
       ...template.config
     }));
+    setAsRestorePoint(template.config.content || '', `Mẫu: ${template.name}`);
     
     // Initialize custom field values
     const initialValues: Record<string, string> = {};
@@ -576,7 +618,7 @@ export default function App() {
       }
     } catch (error) {
       console.error('Error reading file:', error);
-      alert('Không thể đọc file Word này. Vui lòng thử lại.');
+      setErrorMessage('Không thể đọc file nội dung này. Vui lòng thử lại với file Word (.docx) hợp lệ.');
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -651,15 +693,18 @@ export default function App() {
           ...prev,
           ...parsedData
         }));
+        setAsRestorePoint(parsedData.content || '', 'Nhập từ file/dán');
       } catch (e) {
         console.error('Failed to parse AI response as JSON:', resultText);
         pushToHistory(formData.content);
         setFormData(prev => ({ ...prev, content: text }));
+        setRestorePoint(text);
       }
     } catch (error: any) {
       console.error('Error parsing with AI:', error);
-      alert(`Có lỗi khi xử lý văn bản bằng AI: ${error.message || 'Lỗi không xác định'}. Đang hiển thị văn bản thô.`);
+      setErrorMessage(`Có lỗi khi xử lý văn bản bằng AI: ${error.message || 'Lỗi không xác định'}. Đang hiển thị văn bản thô.`);
       setFormData(prev => ({ ...prev, content: text }));
+      setRestorePoint(text);
     } finally {
       setIsGenerating(false);
     }
@@ -683,6 +728,21 @@ export default function App() {
     setFuture([]);
     lastContentRef.current = contentToSave;
     isInternalChangeRef.current = true;
+  };
+
+  const setAsRestorePoint = (content: string, label: string = 'Nội dung ban đầu') => {
+    setRestorePoint(content);
+    setMajorRestorePoints(prev => {
+      // Don't add if the same content was the last point
+      if (prev.length > 0 && prev[prev.length - 1].content === content) return prev;
+      return [...prev, { content, label, timestamp: new Date() }].slice(-10); // Keep last 10
+    });
+  };
+
+  const ensureRestorePoint = (label: string = 'Trước khi chỉnh sửa') => {
+    if (formData.content.trim()) {
+      setAsRestorePoint(formData.content, label);
+    }
   };
 
   const undo = () => {
@@ -735,6 +795,7 @@ export default function App() {
   const convertEncoding = async (from: 'tcvn3' | 'vni') => {
     if (!formData.content.trim()) return;
     
+    ensureRestorePoint('Trước khi chuyển mã');
     pushToHistory(formData.content);
     setIsCleaning(true);
     try {
@@ -753,7 +814,7 @@ export default function App() {
       }
     } catch (error) {
       console.error('Error converting encoding:', error);
-      alert('Lỗi chuyển mã. Vui lòng thử lại sau.');
+      setErrorMessage('Lỗi hệ thống chuyển mã. Vui lòng thử lại sau.');
     } finally {
       setIsCleaning(false);
       setShowConvertMenu(false);
@@ -763,6 +824,7 @@ export default function App() {
   const checkSpellWithAI = async () => {
     if (!formData.content.trim()) return;
     
+    ensureRestorePoint('Trước khi sửa chính tả');
     pushToHistory(formData.content);
     setIsCheckingSpell(true);
     try {
@@ -781,13 +843,14 @@ export default function App() {
       }
     } catch (error) {
       console.error('Error checking spell:', error);
-      alert('Lỗi kiểm tra chính tả. Vui lòng thử lại sau.');
+      setErrorMessage('Lỗi hệ thống kiểm tra chính tả. Vui lòng thử lại sau.');
     } finally {
       setIsCheckingSpell(false);
     }
   };
 
   const convertCase = (type: 'upper' | 'lower' | 'sentence' | 'no-accent') => {
+    ensureRestorePoint('Trước khi đổi kiểu chữ');
     pushToHistory(formData.content);
     let text = formData.content;
     if (type === 'upper') {
@@ -810,6 +873,7 @@ export default function App() {
   const cleanContentWithAI = async () => {
     if (!formData.content.trim()) return;
     
+    ensureRestorePoint('Trước khi AI Optimize');
     pushToHistory(formData.content);
     setIsCleaning(true);
     try {
@@ -829,11 +893,13 @@ export default function App() {
 
       const cleanedText = await callAI(prompt);
       if (cleanedText) {
-        setFormData(prev => ({ ...prev, content: cleanedText.trim() }));
+        const finalContent = cleanedText.trim();
+        setFormData(prev => ({ ...prev, content: finalContent }));
+        setAsRestorePoint(finalContent, 'Sau AI Optimize');
       }
     } catch (error) {
       console.error('Error cleaning content with AI:', error);
-      alert('Không thể kết nối với AI để làm sạch văn bản. Vui lòng kiểm tra lại.');
+      setErrorMessage('Không thể kết nối với dịch vụ AI để tối ưu văn bản. Vui lòng kiểm tra kết nối.');
     } finally {
       setIsCleaning(false);
     }
@@ -842,6 +908,7 @@ export default function App() {
   const rewriteWithAI = async () => {
     if (!formData.content.trim()) return;
     
+    ensureRestorePoint('Trước khi AI Viết lại');
     pushToHistory(formData.content);
     setIsRewriting(true);
     try {
@@ -862,11 +929,13 @@ export default function App() {
 
       const rewrittenText = await callAI(prompt);
       if (rewrittenText) {
-        setFormData(prev => ({ ...prev, content: rewrittenText.trim() }));
+        const finalContent = rewrittenText.trim();
+        setFormData(prev => ({ ...prev, content: finalContent }));
+        setAsRestorePoint(finalContent, 'Sau AI Viết lại');
       }
     } catch (error) {
       console.error('Error rewriting content with AI:', error);
-      alert('Không thể kết nối với AI để viết lại văn bản. Vui lòng kiểm tra lại.');
+      setErrorMessage('Không thể kết nối với dịch vụ AI để viết lại nội dung. Vui lòng kiểm tra kết nối.');
     } finally {
       setIsRewriting(false);
     }
@@ -983,7 +1052,7 @@ export default function App() {
       setTimeout(() => setShowSuccess(false), 3000);
     } catch (error) {
       console.error('Error generating document:', error);
-      alert(error instanceof Error ? error.message : 'Có lỗi xảy ra khi tạo file Word. Vui lòng thử lại.');
+      setErrorMessage(error instanceof Error ? error.message : 'Có lỗi xảy ra khi tạo file xuất bản. Vui lòng thử lại.');
     } finally {
       setIsGenerating(false);
     }
@@ -1168,6 +1237,17 @@ export default function App() {
           <div className="flex items-center gap-3">
             {user ? (
               <div className="flex items-center gap-3">
+                <button 
+                  onClick={saveDocument}
+                  disabled={isSaving}
+                  className="hidden sm:flex px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-100 items-center gap-2 active:scale-95 disabled:opacity-50"
+                >
+                  {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                  Lưu Cloud
+                </button>
+
+                <div className="h-6 w-[1px] bg-slate-200 mx-1"></div>
+
                 <div className="hidden md:flex flex-col items-end">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Xin chào,</span>
                   <span className="text-xs font-bold text-slate-700">{user.displayName}</span>
@@ -1187,14 +1267,22 @@ export default function App() {
                       <p className="text-xs font-bold text-slate-800 truncate">{user.email}</p>
                     </div>
                     <button 
+                      onClick={saveDocument}
+                      disabled={isSaving}
+                      className="w-full text-left px-4 py-2 text-xs font-bold text-emerald-600 hover:bg-emerald-50 flex items-center gap-3 transition-colors"
+                    >
+                      <Save size={16} /> Lưu văn bản lên Cloud
+                    </button>
+                    <button 
                       onClick={() => setShowHistoryModal(true)}
                       className="w-full text-left px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-3 transition-colors"
                     >
                       <History size={16} /> Văn bản đã lưu
                     </button>
+                    <div className="h-px bg-slate-100 my-1"></div>
                     <button 
                       onClick={handleLogout}
-                      className="w-full text-left px-4 py-2 text-xs font-bold text-red-500 hover:bg-red-50 flex items-center gap-3 transition-colors mt-1"
+                      className="w-full text-left px-4 py-2 text-xs font-bold text-red-500 hover:bg-red-50 flex items-center gap-3 transition-colors"
                     >
                       <LogOut size={16} /> Đăng xuất
                     </button>
@@ -1202,13 +1290,19 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <button 
-                onClick={handleLogin}
-                className="btn-primary"
-              >
-                <LogIn size={16} />
-                <span>Đăng nhập</span>
-              </button>
+              <div className="flex items-center gap-3">
+                <div className="hidden sm:block text-right mr-1">
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Lưu trữ trực tuyến</p>
+                  <p className="text-[10px] font-medium text-slate-500 italic">Đăng nhập để lưu cloud</p>
+                </div>
+                <button 
+                  onClick={handleLogin}
+                  className="px-4 py-2 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-2 active:scale-95"
+                >
+                  <UserIcon size={16} />
+                  <span>Đăng nhập Google</span>
+                </button>
+              </div>
             )}
 
             <div className="h-8 w-[1px] bg-slate-200/60 mx-1"></div>
@@ -1412,8 +1506,61 @@ export default function App() {
                   />
                 </div>
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between bg-slate-900 rounded-xl p-1 shadow-lg shadow-slate-200">
-                    <div className="flex items-center gap-1">
+                  <div className="flex items-center justify-center bg-slate-900 rounded-xl p-1 shadow-lg shadow-slate-200">
+                    <div className="flex items-center gap-2 py-0.5">
+                      <button
+                        onClick={checkSpellWithAI}
+                        disabled={isCheckingSpell}
+                        className="p-1 px-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5"
+                      >
+                        {isCheckingSpell ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                        CHÍNH TẢ
+                      </button>
+                      <button
+                        onClick={rewriteWithAI}
+                        disabled={isRewriting}
+                        className="p-1 px-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5"
+                      >
+                        {isRewriting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                        AI REWRITE
+                      </button>
+                      <button
+                        onClick={cleanContentWithAI}
+                        disabled={isCleaning}
+                        className="p-1 px-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 shadow-sm"
+                      >
+                        {isCleaning ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                        AI OPTIMIZE
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (majorRestorePoints.length === 0) {
+                            if (formData.content.trim()) {
+                              setAsRestorePoint(formData.content, 'Nội dung bắt đầu');
+                              setErrorMessage("Điểm khôi phục đầu tiên đã được tạo. Bạn có thể khôi phục về trạng thái này sau khi chỉnh sửa.");
+                            } else {
+                              setErrorMessage("Chưa có lịch sử nội dung để khôi phục.");
+                            }
+                            return;
+                          }
+                          setShowRestoreModal(true);
+                        }}
+                        className="p-1 px-3 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5"
+                        title="Xem lịch sử khôi phục"
+                      >
+                        <RotateCcw size={12} />
+                        KHÔI PHỤC
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                       <FileText size={12} className="text-indigo-500" />
+                       Nội dung văn bản
+                    </h3>
+                    
+                    <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-sm">
                       <div className="relative">
                         <button
                           onClick={() => {
@@ -1469,8 +1616,8 @@ export default function App() {
                               setShowConvertMenu(!showConvertMenu);
                             }
                           }}
-                          className="p-2 text-white hover:bg-white/10 rounded-lg transition-all group"
-                          title="Định dạng font (Bôi đen để áp dụng cho vùng chọn)"
+                          className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-white rounded-lg transition-all group"
+                          title="Định dạng font"
                         >
                           <span className="text-sm font-bold w-4 h-4 flex items-center justify-center">F</span>
                         </button>
@@ -1479,10 +1626,10 @@ export default function App() {
                             <>
                               <div className="fixed inset-0 z-30" onClick={() => setShowConvertMenu(false)}></div>
                               <motion.div 
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 10 }}
-                                className="absolute left-0 top-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 w-48 z-40 overflow-hidden"
+                                initial={{ opacity: 0, scale: 0.95 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.95 }}
+                                className="absolute right-0 top-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 w-48 z-40 overflow-hidden"
                               >
                                 <div className="px-4 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-50">Phông chữ hệ thống</div>
                                 {['Arial', 'Roboto', 'Courier New', 'Georgia'].map(font => (
@@ -1520,87 +1667,61 @@ export default function App() {
                           )}
                         </AnimatePresence>
                       </div>
-                        <button
-                          onClick={() => {
-                            const applied = applyFormatting('**');
-                            if (!applied) {
-                              setFormData(prev => ({ ...prev, boldLevel: (prev.boldLevel + 1) % 4 }));
-                            }
-                          }}
-                          className={`p-2 rounded-lg transition-all ${formData.boldLevel > 0 ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-white/10'}`}
-                          title="Tô đậm (Bôi đen để áp dụng cho vùng chọn)"
-                        >
-                          <span className="text-sm font-black w-4 h-4 flex items-center justify-center">B</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            const applied = applyFormatting('[a:center]', '[/a]');
-                            if (!applied) {
-                              setFormData(prev => ({ ...prev, alignLevel: (prev.alignLevel + 1) % 4 }));
-                            }
-                          }}
-                          className={`p-2 rounded-lg transition-all ${formData.alignLevel > 0 ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-white/10'}`}
-                        >
-                          <AlignCenter size={16} />
-                        </button>
+                      
+                      <button
+                        onClick={() => {
+                          const applied = applyFormatting('**');
+                          if (!applied) {
+                            setFormData(prev => ({ ...prev, boldLevel: (prev.boldLevel + 1) % 4 }));
+                          }
+                        }}
+                        className={`p-1.5 rounded-lg transition-all ${formData.boldLevel > 0 ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-white'}`}
+                        title="Tô đậm"
+                      >
+                        <span className="text-sm font-black w-4 h-4 flex items-center justify-center">B</span>
+                      </button>
+                      
+                      <button
+                        onClick={() => {
+                          const applied = applyFormatting('[a:center]', '[/a]');
+                          if (!applied) {
+                            setFormData(prev => ({ ...prev, alignLevel: (prev.alignLevel + 1) % 4 }));
+                          }
+                        }}
+                        className={`p-1.5 rounded-lg transition-all ${formData.alignLevel > 0 ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-white'}`}
+                        title="Căn lề"
+                      >
+                        <AlignCenter size={16} />
+                      </button>
+                      
                       <button
                         onClick={() => setShowPreviewModal(true)}
-                        className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white/10 rounded-lg transition-all"
-                        title="Xem trước mẫu chuẩn"
+                        className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-white rounded-lg transition-all"
+                        title="Xem trước"
                       >
                         <Eye size={16} />
                       </button>
-                      <div className="w-[1px] h-4 bg-white/10 mx-1"></div>
+                      
+                      <div className="w-[1px] h-4 bg-slate-200 mx-0.5"></div>
+                      
                       <button
                         onClick={undo}
                         disabled={!(history.length > 0 || formData.content !== lastContentRef.current)}
-                        className={`p-2 rounded-lg transition-all ${history.length > 0 || formData.content !== lastContentRef.current ? 'text-slate-400 hover:text-white hover:bg-white/10' : 'text-slate-600 opacity-30 cursor-not-allowed'}`}
+                        className={`p-1.5 rounded-lg transition-all ${history.length > 0 || formData.content !== lastContentRef.current ? 'text-slate-500 hover:text-slate-700 hover:bg-white' : 'text-slate-300 cursor-not-allowed'}`}
                         title="Hoàn tác (Ctrl+Z)"
                       >
                         <Undo2 size={16} />
                       </button>
+                      
                       <button
                         onClick={redo}
                         disabled={future.length === 0}
-                        className={`p-2 rounded-lg transition-all ${future.length > 0 ? 'text-slate-400 hover:text-white hover:bg-white/10' : 'text-slate-600 opacity-30 cursor-not-allowed'}`}
+                        className={`p-1.5 rounded-lg transition-all ${future.length > 0 ? 'text-slate-500 hover:text-slate-700 hover:bg-white' : 'text-slate-300 cursor-not-allowed'}`}
                         title="Làm lại (Ctrl+Y)"
                       >
                         <Redo2 size={16} />
                       </button>
                     </div>
-                    <div className="flex items-center gap-1 pr-1">
-                      <button
-                        onClick={checkSpellWithAI}
-                        disabled={isCheckingSpell}
-                        className="p-1 px-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5"
-                      >
-                        {isCheckingSpell ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                        CHÍNH TẢ
-                      </button>
-                      <button
-                        onClick={rewriteWithAI}
-                        disabled={isRewriting}
-                        className="p-1 px-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5"
-                      >
-                        {isRewriting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-                        AI REWRITE
-                      </button>
-                      <button
-                        onClick={cleanContentWithAI}
-                        disabled={isCleaning}
-                        className="p-1 px-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 shadow-sm"
-                      >
-                        {isCleaning ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                        AI OPTIMIZE
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                       <FileText size={12} className="text-indigo-500" />
-                       Nội dung văn bản
-                    </h3>
                   </div>
 
                   <div className="relative group">
@@ -2075,11 +2196,13 @@ export default function App() {
                               >
                                 <Settings size={14} />
                               </button>
-                              <button 
+                               <button 
                                 onClick={(e) => deleteTemplate(template.id!, e)}
-                                className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                                onMouseLeave={() => confirmDeleteTemplateId === template.id && setConfirmDeleteTemplateId(null)}
+                                className={`p-2 rounded-lg transition-all ${confirmDeleteTemplateId === template.id ? 'bg-red-500 text-white opacity-100 scale-110 shadow-lg animate-pulse' : 'text-slate-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100'}`}
+                                title={confirmDeleteTemplateId === template.id ? "Xác nhận xóa mẫu này?" : "Xóa mẫu"}
                               >
-                                <Trash2 size={14} />
+                                {confirmDeleteTemplateId === template.id ? <span className="text-[10px] font-bold px-1">XÓA?</span> : <Trash2 size={14} />}
                               </button>
                             </div>
                           )}
@@ -2192,32 +2315,87 @@ export default function App() {
                     {savedDocuments.map((docItem) => (
                       <div 
                         key={docItem.id}
-                        onClick={() => loadSavedDocument(docItem)}
-                        className="group bg-white border border-slate-200 rounded-2xl p-5 hover:border-emerald-300 hover:shadow-xl hover:shadow-emerald-500/5 transition-all cursor-pointer relative"
+                        className="group bg-white border border-slate-200 rounded-3xl overflow-hidden hover:border-emerald-300 hover:shadow-xl hover:shadow-emerald-500/5 transition-all relative flex flex-col h-full shadow-sm"
                       >
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="w-10 h-10 bg-slate-50 rounded-lg flex items-center justify-center text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-600 transition-colors">
-                            <FileText size={20} />
-                          </div>
-                          <button 
-                            onClick={(e) => deleteDocument(docItem.id, e)}
-                            className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                            title="Xóa văn bản"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                        {/* Action Area - Separate from main click */}
+                        <div className="absolute top-4 right-4 z-50">
+                          <AnimatePresence mode="wait">
+                            {confirmDeleteId === docItem.id ? (
+                              <motion.div 
+                                initial={{ opacity: 0, scale: 0.8, x: 10 }}
+                                animate={{ opacity: 1, scale: 1, x: 0 }}
+                                exit={{ opacity: 0, scale: 0.8, x: 10 }}
+                                className="flex items-center gap-1 bg-white border-2 border-red-500 rounded-2xl p-1 shadow-xl shadow-red-100"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConfirmDeleteId(null);
+                                  }}
+                                  className="px-2 py-1.5 text-[9px] font-bold text-slate-500 hover:bg-slate-50 rounded-xl uppercase"
+                                >
+                                  Hủy
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteDocument(docItem.id, e);
+                                  }}
+                                  disabled={isDeleting === docItem.id}
+                                  className="px-3 py-1.5 bg-red-500 text-white text-[9px] font-bold rounded-xl hover:bg-red-600 transition-colors uppercase flex items-center gap-1 shadow-sm shadow-red-200"
+                                >
+                                  {isDeleting === docItem.id ? <Loader2 size={10} className="animate-spin" /> : null}
+                                  Xóa
+                                </button>
+                              </motion.div>
+                            ) : (
+                              <motion.button 
+                                layoutId={`delete-btn-${docItem.id}`}
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                type="button"
+                                onClickCapture={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setConfirmDeleteId(docItem.id);
+                                }}
+                                className="p-3 rounded-2xl transition-all shadow-lg border-2 pointer-events-auto text-red-500 bg-red-50/90 backdrop-blur-sm hover:bg-red-500 hover:text-white border-red-100 hover:border-red-500 active:scale-90"
+                                title="Xóa văn bản này"
+                              >
+                                <Trash2 size={18} />
+                              </motion.button>
+                            )}
+                          </AnimatePresence>
                         </div>
-                        <h3 className="font-bold text-slate-800 text-sm line-clamp-2 mb-1 group-hover:text-emerald-700 transition-colors">{docItem.title}</h3>
-                        <p className="text-xs text-slate-500 mb-4 line-clamp-2 leading-relaxed">
-                          {docItem.content.substring(0, 100)}...
-                        </p>
-                        <div className="flex items-center justify-between pt-4 border-t border-slate-50">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            {docItem.createdAt?.toDate ? docItem.createdAt.toDate().toLocaleDateString('vi-VN') : 'Mới đây'}
-                          </span>
-                          <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full uppercase tracking-tighter">
-                            {docItem.docType === 'regulation' ? 'Quy chuẩn' : 'Hành chính'}
-                          </span>
+
+                        {/* Clickable Area to Load Document */}
+                        <div 
+                          onClick={() => loadSavedDocument(docItem)}
+                          className="flex-1 p-6 cursor-pointer z-10"
+                        >
+                           <div className="flex items-start mb-4">
+                             <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-600 transition-all group-hover:scale-110">
+                               <FileText size={24} />
+                             </div>
+                           </div>
+                           <h3 className="font-bold text-slate-800 text-base mb-2 group-hover:text-emerald-700 transition-colors pr-12 line-clamp-2 leading-snug">{docItem.title}</h3>
+                           <p className="text-xs text-slate-500 mb-6 line-clamp-2 leading-relaxed opacity-70 italic">
+                             {docItem.content.substring(0, 100)}...
+                           </p>
+                           <div className="flex items-center justify-between pt-4 border-t border-slate-50">
+                             <div className="flex flex-col">
+                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">Cập nhật</span>
+                               <span className="text-xs font-bold text-slate-600">
+                                 {docItem.createdAt?.toDate ? docItem.createdAt.toDate().toLocaleDateString('vi-VN') : 'Mới đây'}
+                               </span>
+                             </div>
+                             <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full uppercase tracking-tighter shadow-sm border border-emerald-100">
+                               {docItem.docType === 'regulation' ? 'Quy chuẩn' : 'Hành chính'}
+                             </span>
+                           </div>
                         </div>
                       </div>
                     ))}
@@ -2272,10 +2450,115 @@ export default function App() {
                 setTimeout(() => setShowSuccess(false), 3000);
               } catch (error) {
                 console.error("Error saving AI template:", error);
-                alert("Lỗi khi lưu mẫu AI");
+                setErrorMessage("Lỗi khi lưu mẫu AI. Vui lòng thử lại sau.");
               }
             }}
           />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showRestoreModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl relative border border-slate-100 flex flex-col max-h-[80vh]"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-500">
+                    <History size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-800">Lịch sử nội dung</h3>
+                    <p className="text-xs text-slate-500">Chọn một phiên bản để khôi phục</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowRestoreModal(false)}
+                  className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+                {majorRestorePoints.slice().reverse().map((point, index) => (
+                  <button
+                    key={index}
+                    onClick={() => {
+                      pushToHistory(formData.content);
+                      setFormData(prev => ({ ...prev, content: point.content }));
+                      setShowRestoreModal(false);
+                      setShowSuccess(true);
+                      setTimeout(() => setShowSuccess(false), 2000);
+                    }}
+                    className="w-full text-left p-4 rounded-2xl border-2 border-slate-50 hover:border-indigo-200 hover:bg-indigo-50/30 transition-all group relative overflow-hidden"
+                  >
+                    <div className="relative z-10">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">
+                          {point.label}
+                        </span>
+                        <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                          {point.timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 line-clamp-2 italic">
+                        "{point.content.substring(0, 100)}..."
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-6 pt-6 border-t border-slate-100">
+                <button 
+                  onClick={() => setShowRestoreModal(false)}
+                  className="w-full py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
+                >
+                  Đóng
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {errorMessage && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl relative border border-red-100"
+            >
+              <div className="w-16 h-16 bg-red-50 rounded-2xl flex items-center justify-center text-red-500 mb-6 mx-auto">
+                <AlertCircle size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-slate-800 text-center mb-4">Thông báo</h3>
+              <p className="text-slate-600 text-center mb-8 whitespace-pre-wrap leading-relaxed">{errorMessage}</p>
+              <button 
+                onClick={() => setErrorMessage(null)}
+                className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-200 active:scale-[0.98]"
+              >
+                Đã hiểu
+              </button>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>
