@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
+// Remove static vite import to avoid bundling issues on Vercel
 import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
 import { GoogleGenAI } from "@google/genai";
 
@@ -23,52 +23,65 @@ app.get('/api/health', (req, res) => {
 const cmToTwips = (cm: number) => Math.round(cm * 567);
 
 const parseStyledText = (text: string, defaultFont: string, currentBold: boolean, currentFont: string): TextRun[] => {
+  if (!text) return [];
+  
   // Combined regex to find matches in order, using non-greedy matches
   const combinedRegex = /(\*\*(.+?)\*\*)|(\[f:(.+?)\](.+?)\[\/f\])|(\[a:(.+?)\](.+?)\[\/a\])/g;
   const runs: TextRun[] = [];
   let lastIdx = 0;
   let match;
 
-  while ((match = combinedRegex.exec(text)) !== null) {
-    if (match.index > lastIdx) {
-      const partText = text.substring(lastIdx, match.index);
+  try {
+    while ((match = combinedRegex.exec(text)) !== null) {
+      if (match.index > lastIdx) {
+        const partText = text.substring(lastIdx, match.index);
+        if (partText) {
+          runs.push(new TextRun({
+            text: partText,
+            font: currentFont || defaultFont || "Times New Roman",
+            size: 28,
+            bold: currentBold
+          }));
+        }
+      }
+
+      if (match[1]) { // Bold: **text**
+        runs.push(...parseStyledText(match[2], defaultFont, true, currentFont || defaultFont));
+      } else if (match[3]) { // Font: [f:name]text[/f]
+        runs.push(...parseStyledText(match[5], defaultFont, currentBold, match[4]));
+      } else if (match[6]) { // Align: [a:type]text[/a]
+        runs.push(...parseStyledText(match[8], defaultFont, currentBold, currentFont || defaultFont));
+      }
+      lastIdx = combinedRegex.lastIndex;
+    }
+
+    if (lastIdx < text.length) {
+      const partText = text.substring(lastIdx);
       if (partText) {
         runs.push(new TextRun({
           text: partText,
-          font: currentFont || defaultFont,
+          font: currentFont || defaultFont || "Times New Roman",
           size: 28,
           bold: currentBold
         }));
       }
     }
-
-    if (match[1]) { // Bold: **text**
-      runs.push(...parseStyledText(match[2], defaultFont, true, currentFont || defaultFont));
-    } else if (match[3]) { // Font: [f:name]text[/f]
-      runs.push(...parseStyledText(match[5], defaultFont, currentBold, match[4]));
-    } else if (match[6]) { // Align: [a:type]text[/a]
-      // Inline alignment is just text in Word runs, skip the alignment tags
-      runs.push(...parseStyledText(match[8], defaultFont, currentBold, currentFont || defaultFont));
-    }
-    lastIdx = combinedRegex.lastIndex;
+  } catch (err) {
+    console.error('Error parsing styled text:', err);
+    // Fallback: return as plain text if parsing fails
+    return [new TextRun({
+      text: text,
+      font: defaultFont || "Times New Roman",
+      size: 28,
+      bold: currentBold
+    })];
   }
 
-  if (lastIdx < text.length) {
-    const partText = text.substring(lastIdx);
-    if (partText) {
-      runs.push(new TextRun({
-        text: partText,
-        font: currentFont || defaultFont,
-        size: 28,
-        bold: currentBold
-      }));
-    }
-  }
-
+  // Ensure at least one run if there is text
   if (runs.length === 0 && text.length > 0) {
     runs.push(new TextRun({
       text: text,
-      font: currentFont || defaultFont,
+      font: currentFont || defaultFont || "Times New Roman",
       size: 28,
       bold: currentBold
     }));
@@ -134,6 +147,8 @@ app.post('/api/generate-docx', async (req, res) => {
     const safeSignerPosition = String(signerPosition || "");
     const safeSignerName = String(signerName || "");
     const safeFont = String(fontFamily || "Times New Roman");
+    const safeBoldLevel = Number(boldLevel || 0);
+    const safeAlignLevel = Number(alignLevel || 0);
     
     const safeMargins = {
       top: Number(margins?.top || 2),
@@ -261,9 +276,9 @@ app.post('/api/generate-docx', async (req, res) => {
 
           // Main Content
           ...safeContent.split('\n').map((line: string) => {
-            const isLineHeading = isHeading(line, boldLevel);
+            const isLineHeading = isHeading(line, safeBoldLevel);
             const headLevel = getHeadingLevel(line);
-            const shouldCenter = (headLevel === 100) || (alignLevel > 0 && headLevel > 0 && headLevel <= alignLevel);
+            const shouldCenter = (headLevel === 100) || (safeAlignLevel > 0 && headLevel > 0 && headLevel <= safeAlignLevel);
             
             return new Paragraph({
               alignment: shouldCenter ? AlignmentType.CENTER : AlignmentType.JUSTIFIED,
@@ -273,7 +288,7 @@ app.post('/api/generate-docx', async (req, res) => {
                 before: 120, 
                 after: 120 
               },
-              children: parseStyledText(line, safeFont, isLineHeading && boldLevel > 0, ""),
+              children: parseStyledText(line, safeFont, isLineHeading && safeBoldLevel > 0, ""),
             });
           }),
 
@@ -353,7 +368,7 @@ app.post('/api/generate-docx', async (req, res) => {
     res.setHeader('Content-Length', buffer.length.toString());
     
     // Gửi buffer
-    res.end(buffer);
+    res.send(buffer);
 
   } catch (error) {
     console.error('SERVER ERROR:', error);
@@ -369,11 +384,13 @@ app.post('/api/generate-docx', async (req, res) => {
 
 // Vite middleware for development
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-  createViteServer({
-    server: { middlewareMode: true },
-    appType: 'spa',
-  }).then((vite) => {
-    app.use(vite.middlewares);
+  import('vite').then(({ createServer: createViteServer }) => {
+    createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    }).then((vite) => {
+      app.use(vite.middlewares);
+    });
   });
 } else if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
   // Static serving for local production test
