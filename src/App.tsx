@@ -431,7 +431,7 @@ export default function App() {
       }
       console.error('Login error:', error);
       if (error.code === 'auth/popup-blocked') {
-        alert('Trình duyệt Cốc Cốc/Chrome/Brave đã chặn cửa sổ đăng nhập.\n\nHướng dẫn khắc phục:\n1. Nhấn vào biểu tượng Ổ KHÓA 🔒 (hoặc biểu tượng khiên) bên trái địa chỉ trang web.\n2. Chọn "Cửa sổ bật lên và chuyển hướng" -> Bật (On).\n3. QUAN TRỌNG: Nếu dùng Cốc Cốc, hãy nhấn vào biểu tượng Chặn Quảng Cáo (hình khiên xanh/đen) và chọn "Tắt trên trang này".\n4. Tải lại trang và thử lại.');
+        alert('Trình duyệt Cốc Cốc/Chrome đã chặn cửa sổ đăng nhập.\n\nHướng dẫn cho phép:\n1. Nhấn vào biểu tượng Ổ KHÓA 🔒 bên trái địa chỉ trang web.\n2. Tìm "Cửa sổ bật lên" (Pop-ups) và chọn "Cho phép" (Allow).\n3. Tải lại trang và thử lại.');
       } else {
         alert(`Đăng nhập thất bại: ${error.message || 'Lỗi không xác định'}`);
       }
@@ -1421,22 +1421,20 @@ export default function App() {
                             if (hasSelection) {
                               const fonts = ['Arial', 'Roboto', 'Courier New', 'Georgia'];
                               const text = formData.content;
-                              const selectionStart = contentRef.current!.selectionStart;
-                              const selectionEnd = contentRef.current!.selectionEnd;
-                              const rawSelectedText = text.substring(selectionStart, selectionEnd);
+                              const start = contentRef.current!.selectionStart;
+                              const end = contentRef.current!.selectionEnd;
+                              const selectedText = text.substring(start, end);
                               
-                              // Handle whitespace: Trim selected text for tag detection but remember original indices
-                              const selectedText = rawSelectedText.trim();
+                              // Check if selection is already wrapped in a font tag [f:Name]...[/f]
                               const fontMatch = selectedText.match(/^\[f:([^\]]*)\](.*)\[\/f\]$/s);
-                              const internalText = fontMatch ? fontMatch[2].trim() : selectedText;
+                              const internalText = fontMatch ? fontMatch[2] : selectedText;
                               const currentLocalFont = fontMatch ? fontMatch[1] : "";
                               
                               let nextFont = "";
                               if (!fontMatch || currentLocalFont === "") {
                                 nextFont = fonts[0]; // Start with Arial
                               } else {
-                                // Find closest match ignoring case/spaces
-                                const currentIndex = fonts.findIndex(f => f.toLowerCase() === currentLocalFont.toLowerCase().trim());
+                                const currentIndex = fonts.indexOf(currentLocalFont);
                                 if (currentIndex === -1 || currentIndex === fonts.length - 1) {
                                   nextFont = ""; // Return to default
                                 } else {
@@ -1447,11 +1445,10 @@ export default function App() {
                               pushToHistory(text);
                               let newContent;
                               if (nextFont === "") {
-                                newContent = text.substring(0, selectionStart) + (rawSelectedText.replace(selectedText, internalText)) + text.substring(selectionEnd);
+                                newContent = text.substring(0, start) + internalText + text.substring(end);
                               } else {
                                 const newTag = `[f:${nextFont}]`;
-                                const inner = rawSelectedText.replace(selectedText, newTag + internalText + "[/f]");
-                                newContent = text.substring(0, selectionStart) + inner + text.substring(selectionEnd);
+                                newContent = text.substring(0, start) + newTag + internalText + "[/f]" + text.substring(end);
                               }
                               
                               setFormData(prev => ({ ...prev, content: newContent }));
@@ -1460,8 +1457,12 @@ export default function App() {
                               setTimeout(() => {
                                 if (contentRef.current) {
                                   contentRef.current.focus();
-                                  // We don't try to get the exact selection back as it's complex with the replacement,
-                                  // just place cursor after the new content
+                                  if (nextFont === "") {
+                                    contentRef.current.setSelectionRange(start, start + internalText.length);
+                                  } else {
+                                    const tagOffset = `[f:${nextFont}]`.length;
+                                    contentRef.current.setSelectionRange(start, start + tagOffset + internalText.length + 4);
+                                  }
                                 }
                               }, 10);
                             } else {
