@@ -48,9 +48,16 @@ export interface AIResponse {
   questions?: string[];
 }
 
+const getApiKey = () => {
+  // Try platform-specific GEMINI_API_KEY first (AI Studio)
+  // then fallback to VITE_ prefix (standard Vite/Vercel)
+  return (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || 
+         (import.meta.env?.VITE_GEMINI_API_KEY || '');
+};
+
 export async function generateTemplatePrompt(description: string, chatHistory: any[] = []): Promise<AIResponse> {
-  const apiKey = (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
-  if (!apiKey) throw new Error('API Key missing. Vui lòng cấu hình GEMINI_API_KEY.');
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('API Key missing. Vui lòng cấu hình GEMINI_API_KEY hoặc VITE_GEMINI_API_KEY.');
 
   const ai = new GoogleGenAI({ apiKey });
   
@@ -127,8 +134,8 @@ export async function generateTemplatePrompt(description: string, chatHistory: a
 }
 
 export async function analyzeDocxForTemplate(extractedText: string, customName?: string): Promise<AIResponse> {
-  const apiKey = (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
-  if (!apiKey) throw new Error('API Key missing. Vui lòng cấu hình GEMINI_API_KEY.');
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('API Key missing. Vui lòng cấu hình GEMINI_API_KEY hoặc VITE_GEMINI_API_KEY.');
 
   const ai = new GoogleGenAI({ apiKey });
   
@@ -183,8 +190,8 @@ export async function analyzeDocxForTemplate(extractedText: string, customName?:
 }
 
 export async function extractDocxStructure(extractedText: string): Promise<any> {
-  const apiKey = (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
-  if (!apiKey) throw new Error('API Key missing. Vui lòng cấu hình GEMINI_API_KEY.');
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('API Key missing. Vui lòng cấu hình GEMINI_API_KEY hoặc VITE_GEMINI_API_KEY.');
 
   const ai = new GoogleGenAI({ apiKey });
   
@@ -246,7 +253,7 @@ export async function extractDocxStructure(extractedText: string): Promise<any> 
 }
 
 export async function checkSpellWithAI(content: string): Promise<string> {
-  const apiKey = (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+  const apiKey = getApiKey();
   if (!apiKey) throw new Error('API Key missing.');
 
   const ai = new GoogleGenAI({ apiKey });
@@ -264,7 +271,7 @@ export async function checkSpellWithAI(content: string): Promise<string> {
 }
 
 export async function cleanContentWithAI(content: string): Promise<string> {
-  const apiKey = (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+  const apiKey = getApiKey();
   if (!apiKey) throw new Error('API Key missing.');
 
   const ai = new GoogleGenAI({ apiKey });

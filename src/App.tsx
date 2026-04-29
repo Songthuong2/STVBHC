@@ -66,8 +66,8 @@ let genAIInstance: GoogleGenAI | null = null;
 
 const getGenAI = () => {
   if (!genAIInstance) {
-    // Ưu tiên lấy từ biến VITE_ như người dùng đã đặt trong ảnh
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    // Ưu tiên lấy từ biến VITE_ hoặc process.env (AI Studio)
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
     if (!apiKey) {
       throw new Error('Chưa cấu hình API Key. Vui lòng đặt biến VITE_GEMINI_API_KEY trong phần Settings.');
     }

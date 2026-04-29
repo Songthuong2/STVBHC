@@ -144,7 +144,7 @@ export const AITemplateAssistant: React.FC<AITemplateAssistantProps> = ({ onClos
       let errorMessage = 'Đã có lỗi xảy ra. Vui lòng thử lại.';
       if (error instanceof Error) {
         if (error.message.includes('API Key missing')) {
-          errorMessage = 'Chưa cấu hình API Key. Vui lòng liên hệ quản trị viên.';
+          errorMessage = 'Chưa cấu hình API Key. Nếu bạn đã triển khai (Vercel/Netlify), hãy thêm biến môi trường VITE_GEMINI_API_KEY.';
         } else if (error.message.includes('file Word trống')) {
           errorMessage = 'File Word bạn tải lên không có nội dung hoặc không thể đọc được. Hãy thử file khác.';
         } else {
